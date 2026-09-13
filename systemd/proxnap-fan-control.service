@@ -1,0 +1,18 @@
+[Unit]
+Description=Proxnap TVS-1288X two-zone fan controller
+Requires=qnap8528-load-module.service
+After=qnap8528-load-module.service
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/opt/proxnap
+ExecStart=/usr/bin/python3 -m proxnap.fan_control --config /etc/proxnap/fan-control.conf
+ExecStopPost=/usr/bin/python3 -m proxnap.fan_control --config /etc/proxnap/fan-control.conf --failsafe
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

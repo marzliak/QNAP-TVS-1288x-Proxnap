@@ -1,0 +1,18 @@
+[Unit]
+Description=Proxnap TVS-1288X front LCD
+Requires=qnap8528-load-module.service
+After=qnap8528-load-module.service proxnap-fan-control.service
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/opt/proxnap
+ExecStart=/usr/bin/python3 -m proxnap.lcd --config /etc/proxnap/lcd.conf
+ExecStopPost=-/usr/bin/python3 -m proxnap.lcd --config /etc/proxnap/lcd.conf --off
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

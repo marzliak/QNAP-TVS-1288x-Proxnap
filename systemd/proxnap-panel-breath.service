@@ -1,0 +1,19 @@
+[Unit]
+Description=Proxnap TVS-1288X optional breathing panel LED
+Requires=qnap8528-load-module.service
+After=qnap8528-load-module.service
+Conflicts=proxnap-panel-static.service
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/opt/proxnap
+ExecStart=/usr/bin/python3 -m proxnap.panel_led --config /etc/proxnap/panel-led.conf --breathe
+ExecStopPost=-/usr/bin/python3 -m proxnap.panel_led --config /etc/proxnap/panel-led.conf --static
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

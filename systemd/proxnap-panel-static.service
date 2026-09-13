@@ -1,0 +1,17 @@
+[Unit]
+Description=Proxnap TVS-1288X static panel brightness
+Requires=qnap8528-load-module.service
+After=qnap8528-load-module.service
+Conflicts=proxnap-panel-breath.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=PYTHONPATH=/opt/proxnap
+ExecStart=/usr/bin/python3 -m proxnap.panel_led --config /etc/proxnap/panel-led.conf --static
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

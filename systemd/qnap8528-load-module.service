@@ -1,0 +1,14 @@
+[Unit]
+Description=Load qnap8528 hardware-monitor module
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/sbin/modprobe coretemp
+ExecStartPre=-/sbin/modprobe pch_cometlake
+ExecStartPre=-/sbin/modprobe jc42
+ExecStartPre=-/sbin/modprobe drivetemp
+ExecStart=/sbin/modprobe qnap8528 preserve_leds=true
+
+[Install]
+WantedBy=multi-user.target

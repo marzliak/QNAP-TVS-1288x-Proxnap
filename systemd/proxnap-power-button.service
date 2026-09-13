@@ -1,0 +1,16 @@
+[Unit]
+Description=Proxnap TVS-1288X guarded power button
+After=multi-user.target
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/opt/proxnap
+ExecStart=/usr/bin/python3 -m proxnap.buttons --kind power --config /etc/proxnap/power-button.conf
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

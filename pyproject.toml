@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qnap-tvs-1288x-proxnap"
+version = "0.1.0"
+description = "Safe Proxmox hardware control for the QNAP TVS-1288X"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "Proxnap contributors"}]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8", "ruff>=0.16,<1"]
+
+[project.scripts]
+proxnap-fan-control = "proxnap.fan_control:main"
+proxnap-lcd = "proxnap.lcd:main"
+proxnap-status-led = "proxnap.status_led:main"
+proxnap-panel-led = "proxnap.panel_led:main"
+proxnap-disk-leds = "proxnap.disk_leds:main"
+proxnap-buttons = "proxnap.buttons:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+src = ["src"]
