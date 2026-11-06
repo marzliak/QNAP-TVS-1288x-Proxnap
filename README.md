@@ -6,9 +6,11 @@ QTS: both fan zones, the 16x2 LCD and its buttons, chassis and drive LEDs, the
 USB Copy button, and the power button.
 
 > [!WARNING]
-> This code has been tested on one **QNAP TVS-1288X (12-bay)**. It has not been
-> tested on the **TVS-h1688X (16-bay)**. Every hardware-facing command checks the
-> chassis identity and refuses the 16-bay model.
+> The reference platform is one **QNAP TVS-1288X (12-bay)**. The
+> **TVS-h1688X (16-bay)** has not been tested. Every hardware-facing command
+> checks the chassis identity and refuses the 16-bay model. The
+> [validation matrix](docs/VALIDATION.md) separates physical hardware checks,
+> automated tests, and deployment of this package.
 
 ## What Proxnap brings back
 
@@ -57,7 +59,7 @@ The working system is not stock:
   Xeon W-1250;
 - 128 GB of Kingston DDR4 ECC memory, installed as four 32 GB dual-rank DIMMs
   running at 2667 MT/s;
-- Proxmox VE 9.x on Debian 13 (9.2.18 in the latest snapshot), with kernel
+- Proxmox VE 9.x on Debian 13 (9.2.26 in the latest snapshot), with kernel
   7.0.14-15-pve;
 - five ZFS pools spanning SATA SSDs, NVMe SSDs, and eight hard disks;
 - a separate 14 TB USB backup disk;
@@ -95,20 +97,23 @@ not a universal profile for every TVS-1288X.
 
 ## Operating record
 
-The longest completed boot interval in the retained system login history is
-**42 days, 23 hours, and 35 minutes**: 20 July 2026 at 02:46 BRT through
-1 September 2026 at 02:21 BRT. This is the longest verifiable interval in the
-history still present on the reference machine, not a claim about its entire
-lifetime.
+The reference machine runs Proxmox VE **9.2.26** with kernel
+**7.0.14-15-pve**. At the check on **6 November 2026, 19:56 BRT**, it had been
+up for **62 days, 1 hour, and 19 minutes**, since 5 September 2026 at 18:37 BRT.
+All five ZFS pools were healthy. Fan control, the LCD, and the status LED
+service were running, with zero automatic restarts in their current systemd
+counters.
 
-At the latest check, on 12 September 2026 at 20:25 BRT, the machine had been up
-**7 days, 1 hour, and 48 minutes** (booted 5 September 2026 at 18:37 BRT), with
-all five ZFS pools healthy and no failed systemd units. The hottest CPU package
-reading was 70 C, rear fans were turning at 1755-1904 RPM, and all local pools
-were below 16% dataset-space use. Load, memory, per-fan RPM, temperatures, and
-pool capacity are tabulated in
-[reference system](docs/REFERENCE_SYSTEM.md#operating-record). These are
-point-in-time figures, not sizing recommendations.
+This is sustained operation of the reference configuration. Its installed
+chassis controller predates the Python package in this repository, so the
+uptime is not a 62-day hardware test of this exact release. See the
+[validation matrix](docs/VALIDATION.md) for the checks completed on each layer.
+
+The current boot is still in progress. The longest completed interval in the
+retained login history remains **42 days, 23 hours, and 35 minutes**, from
+20 July to 1 September 2026. The dated
+[reference snapshot](docs/REFERENCE_SYSTEM.md#operating-record) includes
+temperatures, per-fan RPM, and pool capacity.
 
 ## Hardware controls
 
@@ -146,6 +151,8 @@ The installer never performs any of them.
 Read [hardware support](docs/HARDWARE_SUPPORT.md) and the
 [safety model](docs/SAFETY.md) before installing. If the fans are already
 misbehaving, go straight to the [recovery procedure](docs/SAFETY.md#recovery).
+For RPM pulses, sensor alarms, and power-policy checks, see
+[thermal troubleshooting](docs/TROUBLESHOOTING.md).
 The work Proxnap deliberately leaves alone is listed under
 [outside this project](docs/HARDWARE_SUPPORT.md#outside-this-project).
 
@@ -175,8 +182,11 @@ python3 -m compileall -q src tests
 
 The test suite uses mocks and temporary files, so it does not touch QNAP
 hardware. A clean test run cannot replace validation on the physical chassis.
+[Validation](docs/VALIDATION.md) records that distinction for each feature.
 [Architecture](docs/ARCHITECTURE.md) describes the service layout, the lock
 model, and the trust boundary.
+
+Documentation updates are listed in the [changelog](CHANGELOG.md).
 
 ## License
 

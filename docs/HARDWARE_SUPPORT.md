@@ -11,6 +11,12 @@ The runtime also accepts `TVS-H1288X` as a DMI identity from the same 12-bay
 chassis family. That identity is part of the model guard, not a claim that every
 hardware revision has been validated.
 
+The reference configuration was observed running Proxmox VE 9.2.26 with kernel
+`7.0.14-15-pve` on 6 November 2026, after 62 days of uptime. Fan control, LCD,
+and status LED services were active, and all five ZFS pools were healthy.
+See [validation](VALIDATION.md) for the limits of that operating evidence and
+[the reference snapshot](REFERENCE_SYSTEM.md#operating-record) for the readings.
+
 A similar embedded controller does not make another QNAP model compatible. Fan
 zones, temperature inputs, LED numbering, and button events can differ even
 between related chassis.
@@ -66,6 +72,8 @@ qnap8528 system temperatures (`temp6_input` through `temp8_input`).
 The rear fans on the reference chassis were unreliable at very low duty. The
 shipped floors, 40% rear and 50% CPU, are cautious starting values. Check every
 tachometer through a cold start and a warm load before lowering them.
+For RPM pulses, inconsistent sensor readings, and CPU power-policy checks, see
+[thermal troubleshooting](TROUBLESHOOTING.md).
 
 ## LCD
 

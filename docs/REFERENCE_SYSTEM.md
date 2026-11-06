@@ -1,8 +1,9 @@
 # Reference system
 
-This is the machine used to develop and run Proxnap. Capacities below use the
-values reported by Linux and Proxmox. The inventory was refreshed on 12
-September 2026.
+This is the reference machine for the TVS-1288X conversion. The physical
+inventory was recorded on 12 September 2026; the software, ZFS capacity, and
+operating snapshot were refreshed on 6 November 2026. Capacities use the values
+reported by Linux, ZFS, and Proxmox.
 
 ## Chassis, CPU, and platform
 
@@ -13,7 +14,7 @@ September 2026.
 | Original CPU | Intel Xeon W-1250, replaced by the W-1290P |
 | Firmware | American Megatrends 5.13, build date 2 April 2021 |
 | BIOS interface | AMI Aptio Setup 2.21.1278 |
-| OS | Proxmox VE 9.x on Debian 13; 9.2.18 in the latest snapshot |
+| OS | Proxmox VE 9.x on Debian 13; 9.2.26 in the November snapshot |
 | Kernel | 7.0.14-15-pve |
 | Network controllers | 4 x Intel I225-V and 2 x Intel X550 |
 | SATA controllers | Intel Comet Lake AHCI and ASMedia ASM1164 AHCI |
@@ -81,16 +82,17 @@ Linux rather than from Proxnap.
 
 ## ZFS layout
 
-The capacity column combines the top-level dataset's used and available values.
-It is the usable dataset space seen by ZFS, not raw disk capacity.
+Used and available space come from each pool's top-level dataset. The use
+percentage is `used / (used + available)`, not the raw pool allocation ratio.
+The figures below were read on 6 November 2026 at 19:56 BRT.
 
 | Pool | Topology | Used | Available | Use | Main properties |
 |---|---|---:|---:|---:|---|
-| `rpool` | mirror, 2 x 512 GB SATA SSD | 31.69 GiB | 414.56 GiB | 7.10% | boot/root; compression on; 128K records |
-| `vmpool` | mirror, 2 x 1 TB NVMe | 104.08 GiB | 795.20 GiB | 11.57% | VM data; `zstd-3`; 128K records |
-| `qlc-cold` | mirror, 2 x 1 TB SATA SSD | 2.39 MiB | 899.25 GiB | <0.01% | replica data; `zstd-9`; 1M records |
-| `fast4` | stripe, 2 x 4 TB HDD | 10.55 MiB | 7.12 TiB | <0.01% | bulk tier; `lz4`; 1M records |
-| `tank` | RAIDZ1, 6 x 16 TB HDD | 10.90 TiB | 58.73 TiB | 15.66% | main data; properties vary by dataset |
+| `rpool` | mirror, 2 x 512 GB SATA SSD | 44.29 GiB | 401.80 GiB | 9.93% | boot/root; compression on; 128K records |
+| `vmpool` | mirror, 2 x 1 TB NVMe | 138.94 GiB | 760.48 GiB | 15.45% | VM data; `zstd-3`; 128K records |
+| `qlc-cold` | mirror, 2 x 1 TB SATA SSD | 2.56 MiB | 899.25 GiB | <0.01% | replica data; `zstd-9`; 1M records |
+| `fast4` | stripe, 2 x 4 TB HDD | 11.43 MiB | 7.12 TiB | <0.01% | bulk tier; `lz4`; 1M records |
+| `tank` | RAIDZ1, 6 x 16 TB HDD | 11.41 TiB | 58.23 TiB | 16.38% | main data; properties vary by dataset |
 
 `tank` also has a mirrored special vdev made from the two Samsung 970 EVO Plus
 SSDs. Metadata and selected small blocks can land there. The ADATA 2 TB NVMe is
@@ -102,9 +104,10 @@ data that exists elsewhere or can be recreated.
 
 ## Proxmox storage view
 
-The current Proxmox definitions are listed below. `tank` is an online ZFS pool
-but is not registered as Proxmox storage. External backup targets are listed by
-role.
+The Proxmox definitions and figures below are the 12 September 2026 inventory,
+not the November capacity snapshot. At that inventory, `tank` was an online
+ZFS pool but was not registered as Proxmox storage. External backup targets are
+listed by role.
 
 | Storage role | Backend | Total | Used | Used % |
 |---|---|---:|---:|---:|
@@ -122,28 +125,36 @@ reported capacity does not prove that they are independent failure domains.
 
 ## Operating record
 
-The longest completed boot interval in the retained system login history ran
-from 20 July 2026 at 02:46 BRT to 1 September 2026 at 02:21 BRT: **42 days,
-23 hours, and 35 minutes**. This is a verifiable record from the history still
-present on the machine, not a lifetime maximum.
+The current boot began on 5 September 2026 at 18:37 BRT and was still running
+at the November check. It has exceeded the longest completed interval in the
+retained login history: **42 days, 23 hours, and 35 minutes**, from
+20 July 2026 at 02:46 BRT to 1 September 2026 at 02:21 BRT.
 
-Latest live check: 12 September 2026 at 20:25 BRT:
+Latest live check: **6 November 2026 at 19:56 BRT**:
 
 | Check | Result |
 |---|---|
-| Uptime | 7 days, 1 hour, 48 minutes; boot time 5 September 2026, 18:37 BRT |
+| Uptime | 62 days, 1 hour, 19 minutes; boot time 5 September 2026, 18:37 BRT |
+| Proxmox manager / running kernel | 9.2.26 / 7.0.14-15-pve |
 | ZFS | all five pools healthy |
-| systemd | zero failed units |
-| Guests | one running, two stopped |
-| Load average | 3.17 / 3.41 / 3.74 on 20 logical CPUs |
-| Host memory | 84.98 GB used of 134.90 GB reported by Proxmox, including host cache |
+| Chassis services | fan control, LCD, and status LED active; zero automatic restarts in their current systemd counters |
+| Load average | 2.50 / 2.86 / 2.80 on 20 logical CPUs |
+| Host memory | 125.64 GiB total, 65.97 GiB available from Linux meminfo |
 | Host swap | disabled, 0 bytes configured |
-| Hottest CPU package reading | 70 C from `coretemp` |
-| QNAP system temperature inputs | 31 C, 29 C, and 25 C |
-| Rear fans | 1755, 1873, and 1904 RPM; `pwm1=102` (40%) |
-| CPU fans | 1376 and 1392 RPM; `pwm7=137` (54%) |
+| CPU package reading | 69 C from `coretemp` |
+| QNAP system temperature inputs | 32 C, 30 C, and 27 C |
+| Rear fans | 1760, 1868, and 1855 RPM; `pwm1=102` (40%) |
+| CPU fans | 1392 and 1376 RPM; `pwm7=137` (54%) |
+| CPU power policy | `intel_pstate`, `powersave`, EPP `balance_power`; Turbo enabled, HWP dynamic boost disabled |
 
 The qnap8528 module loader, fan controller, LCD, status LED, static panel LED, and
-USB Copy service were active. Breathing mode, disk-LED monitoring, and the custom
-power-button service were disabled. That service mix reflects the reference
-machine, while a fresh install keeps both button listeners disabled.
+USB Copy service were active. Disk-LED monitoring and the custom power-button
+service were inactive. A fresh install of this package keeps both button
+listeners disabled.
+
+The installed chassis controller predates this repository's Python package.
+These observations establish the reference machine's operating record, not
+long-duration hardware validation of every public daemon or fail-safe path.
+The [validation matrix](VALIDATION.md) identifies the checks made on the
+hardware and in automated tests. Temperature, load, and capacity are dated
+samples; service restart counters do not establish an incident-free history.
