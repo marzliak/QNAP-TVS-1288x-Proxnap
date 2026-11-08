@@ -1,123 +1,93 @@
 # Front-panel controls
 
-Proxmox can run the TVS-1288X well, but it does not know how to drive the
-QNAP-specific LCD, LEDs, fans, or USB Copy input. Proxnap restores those parts
-as local Linux services so the chassis remains an operating interface rather
-than a row of inactive controls.
-
 ## LCD
 
-The built-in 16x2 display is connected to `/dev/ttyS1` and uses the QNAP/ICP
-protocol at 1200 baud. The default service rotates through three pages:
+The 16x2 display uses `/dev/ttyS1`, 1200 baud and the QNAP/ICP serial protocol.
+Text is ASCII-fitted to 16 columns. Serial input preserves partial frames across
+reads, retains at most three bytes, and clears partial state on connection errors
+or reopen.
 
-| Page | First line | Second line |
-|---|---|---|
-| System | `Proxmox VE` | local time and date |
-| Temperature | hottest CPU reading | hottest system/storage reading |
-| Resources | host memory use | observed fan RPM range |
+The landing display rotates through pressure (load/RAM), workload
+(hostname/uptime/VM/LXC counts), and aggregate network throughput. A missing,
+failed or expired live snapshot shows `unknown`, not fabricated zero measurements.
 
-Text is fitted to the physical 16-character width. Unsupported characters are
-replaced rather than sent as arbitrary bytes to the controller.
+- Lower button (`0x02`): advance the landing frame or next section/detail.
+- Upper button (`0x01`): enter the numbered menu, enter a section, return to its
+  cover, or select an action.
+- Upper hold on HOME: lock/unlock the current landing frame.
+- A dark display consumes the wake gesture; it does not execute a hidden action.
 
-The two buttons beside the LCD are live:
+Sections are Status, Network, Storage, Thermal and Actions. They include local
+services/alerts, visible interface statistics, pools, temperature and fan controls.
+Home frames rotate every seven seconds, detail pages every eight seconds, and
+backlight inactivity defaults to five minutes. The config controls those timings.
+Missing thermal values are shown as `?`, not zero degrees.
 
-- the upper/confirm button reports mask `0x01`;
-- the lower/next button reports mask `0x02`;
-- either button wakes a dark display and advances the rotation immediately.
+The shared LCD message lock covers complete transactions, not only individual
+writes. Copy/Power feedback owns the display through close and any configured
+final delay. Navigation/held confirmations cannot continue invisibly through an
+external message. The daemon refreshes visible context after ownership changes.
 
-Pages advance automatically every six seconds by default. After five minutes
-without a button press, the backlight turns off; the next press wakes it. Both
-intervals are configurable in `/etc/proxnap/lcd.conf`.
-
-The LCD has its own advisory lock. This prevents two Proxnap processes from
-writing overlapping frames, but programs outside Proxnap must use the same lock
-if they also write `/dev/ttyS1`.
-
-## Status and panel lighting
-
-The status LED is a compact local health indicator:
+## Status and lighting
 
 | Indication | Meaning |
 |---|---|
-| Solid green | no critical condition detected |
-| Red | fan fault, missing `qnap8528`, critical temperature, or failed systemd unit |
-| Off | explicitly requested for service or maintenance work |
+| Solid green status | complete local health checks found no critical or warning condition |
+| Red status/blink | known critical health condition |
+| Green status with USB Copy pulse | warning/update/reboot-required condition |
+| Unknown indication | required sources unavailable; not a healthy verdict |
+| Off | explicit off/disabled monitoring; status JSON is unknown when monitoring is disabled |
 
-A fan fault requests both fan zones at full duty and the red alert as part of
-the same fail-safe response. The alert blinks off for half a second once per
-check cycle, so it reads as steady red rather than a fast flash. Cooling comes
-first; the light only reports it.
+Critical conditions include known high temperatures, failed systemd units,
+unhealthy pools, critical SMART results, read-only root and missing driver.
+Unknown temperature/SMART/package data never closes a known critical incident.
+Status JSON carries source timestamp, check period and unavailability; stale,
+future or incoherent payloads do not produce healthy LCD/metrics output.
 
-The blue front-panel lighting supports three modes:
+Panel brightness is static by default. Optional breathing and off-hours policy
+control the global panel PWM and can affect other lit indicators. Repeated EC
+writes can have visible/acoustic side effects. The separate temperature-aware
+USB LED pulse is manual-only and must not compete with status/Copy writers.
 
-- fixed brightness, enabled by default;
-- a configurable breathing effect using a smooth sine-wave transition;
-- off.
+## Drive LEDs
 
-Breathing is opt-in because it writes the embedded controller repeatedly and
-also changes the apparent brightness of other illuminated front-panel elements.
+Map physical bays explicitly to whole devices. Do not infer bay order from Linux
+enumeration. The repository supplies no machine map. Healthy recent activity is
+green, healthy idle is off, critical SMART is flashing red, and unavailable SMART
+is **not** a green health assertion. Missing devices remain off. `--no-smart` is
+explicit activity-only mode, not a health check.
 
-## Drive-bay LEDs
+## USB Copy and Power
 
-After the administrator maps each physical bay to its whole-device Linux name,
-Proxnap can make the original drive LEDs useful again:
+Listeners and all final effects ship disabled. Enabling a listener alone cannot
+run package or power commands. Fresh press/release pairs are required; duplicate,
+repeated, stale or malformed events cannot count as extra clicks.
 
-- green while I/O activity is observed;
-- off while the mapped device is idle;
-- flashing red when the SMART health check reports a critical result.
+Copy defaults: a deliberate hold of two seconds can refresh metadata only with
+the refresh opt-in. Four to seven clicks arm refresh+upgrade, eight to twelve arm
+reboot, and thirteen or more arm poweroff. Each armed multi-click action needs
+three **new** confirmation clicks after visible feedback. Combined refresh+upgrade
+requires both package permissions; install-only requires the upgrade permission.
+An update never reboots automatically.
 
-Mappings are deliberately empty in the repository. Linux device enumeration can
-change with controllers and cabling, so enabling guessed mappings would make a
-convincing but incorrect front panel. The installer refuses to enable the disk
-LED service until at least one valid mapping exists. See
-[disk LEDs](INSTALL.md#disk-leds) for the mapping and enable steps.
+Power defaults: five clicks arm reboot, ten arm poweroff, then three fresh
+confirmation clicks. Input aliases are deduplicated; sources cannot combine
+pairs or confirmations. EOF/reconnect, dropped events and `SYN_DROPPED` invalidate
+pending state and require a new complete sequence.
 
-## USB Copy and power buttons
+The Actions menu dispatches update and power requests through the same guarded
+Copy backend; it does not bypass the explicit power/package permissions. It uses
+visible LCD confirmation, not a requirement to click the Copy button itself.
 
-The USB Copy and power buttons are exposed as Linux input events. Proxnap can
-translate deliberate click sequences into a small fixed action set:
-
-- refresh package metadata;
-- run a distribution upgrade;
-- reboot;
-- power off.
-
-These listeners and every action are disabled by default. When an action is
-enabled, its first click sequence only arms it; a second confirmation sequence
-must arrive within a short window. Unknown sequences do nothing, paths resolving
-to the same input device are deduplicated, and an action lock prevents two
-physical actions from starting together.
-
-The default sequence thresholds are documented in the shipped configuration
-files. They can be changed, but destructive actions should remain explicit
-opt-ins. The [safety model](SAFETY.md#buttons) covers the guard chain, and
-[INSTALL.md](INSTALL.md#usb-copy-button) covers the opt-in flags.
+Existing first-release button configuration may use different click semantics;
+review the current templates rather than assuming old numeric thresholds still
+have identical meaning. `apt_refresh_enabled`/`apt_upgrade_enabled` remain accepted
+aliases for `short_refresh_enabled`/`upgrade_enabled` when the new key is absent.
+See [installation](INSTALL.md) and [safety](SAFETY.md).
 
 ## Buzzer
 
-The chassis buzzer itself is functional. On the reference unit, short, long, and
-repeated/locate patterns were audibly verified through the original QNAP HAL.
-This is a simple buzzer rather than a voice-alert speaker.
-
-That hardware test does not make buzzer control a Proxnap feature. The QNAP HAL
-commands are not available under Proxmox, and Proxnap has no native Linux or
-embedded-controller path to the buzzer. It emits no beeps at all and signals
-nothing through sound.
-
-## What starts after a default install
-
-| Function | Default |
-|---|---|
-| Two-zone fan control | enabled |
-| LCD pages and LCD buttons | enabled |
-| Health status LED | enabled |
-| Fixed panel brightness | enabled |
-| Breathing panel effect | disabled |
-| Drive-bay LED policy | disabled until mapped |
-| USB Copy action listener | disabled |
-| Power-button action listener | disabled |
-| Package upgrade, reboot, and poweroff actions | disabled |
-
-All hardware-facing commands first enforce the TVS-1288X identity check. The
-untested TVS-h1688X is refused rather than treated as a compatible larger
-chassis. [INSTALL.md](INSTALL.md#identity-check) gives the DMI and VPD rules.
+Audible patterns were physically checked under the original QNAP HAL, not through
+this package. No validated native Linux buzzer implementation or raw EC command is
+supplied. Optional root-supplied command hooks remain empty and disabled; neither
+hardware capability nor those hooks establish current-package physical acceptance.

@@ -1,0 +1,6 @@
+#!/usr/bin/python3
+"""Compatibility entrypoint: no daemon implementation is duplicated here."""
+import sys
+sys.path.insert(0, "/opt/proxnap")
+from proxnap.runtime import installed_main
+raise SystemExit(installed_main())

@@ -16,16 +16,17 @@ USB Copy button, and the power button.
 
 | Chassis feature | Proxnap behavior |
 |---|---|
-| CPU and rear fans | independent temperature curves with per-fan stall detection and a two-zone 100% fail-safe |
-| 16x2 LCD | rotating date/time, CPU and system temperature, memory, and fan-RPM pages |
-| LCD buttons | wake the backlight and advance the page rotation immediately |
-| Status LED | solid green when healthy; red for a critical local fault |
+| CPU and rear fans | independent curves, CPU50%/rear40% floors, immediate thermal protection and two-zone 100% fallback |
+| 16x2 LCD | live landing frames and Status, Network, Storage, Thermal and Actions menus |
+| LCD buttons | wake without hidden actions; lower selects/advances, upper confirms/returns |
+| Status LED | explicit healthy/warning/critical/unknown local health; stale data is not healthy |
 | Front-panel lighting | fixed brightness by default, with an optional breathing effect |
 | HDD, SSD, and M.2 LEDs | green on activity and flashing red on critical SMART health, after explicit bay mapping |
 | USB Copy and power buttons | guarded multi-click actions with a second physical confirmation sequence |
 
 The controls run locally as systemd services and do not depend on a dashboard or
-cloud connection. See [front-panel controls](docs/FRONT_PANEL.md) for the exact
+cloud connection. An optional InfluxDB metrics writer is supplied but disabled by
+default; endpoints, credentials and machine-specific labels are operator inputs. See [front-panel controls](docs/FRONT_PANEL.md) for the exact
 LCD pages, light patterns, button behavior, and safety defaults.
 
 ## Hardware retained under Proxmox
@@ -136,16 +137,19 @@ interfaces and need a fresh hardware test. The pinned DKMS procedure is in
 
 ## Safety defaults
 
-A missing sensor, failed PWM write, readback mismatch, stalled fan, daemon error,
-or orderly daemon stop requests full speed on both fan zones. Fan faults also
-create `/run/proxnap-fan-fault` and request a red status LED. All of that
-depends on the `qnap8528` hwmon interface being present. If it disappears,
-software cannot command the fans at all, and firmware thermal protection is the
-only backstop left.
+A missing required temperature source, failed PWM write/readback, configuration
+error or orderly stop requests full speed on both fan zones under the actuation
+lock. The PWM core is byte-preserved from the reference implementation; the
+package integration itself still needs target acceptance. Quantized readback is
+not proof of fan response or exclusive EC ownership. Per-fan stall diagnostics
+are available explicitly but are **not continuously polled by the default loop**.
+If hwmon disappears, software cannot command cooling; firmware protection and
+external monitoring remain necessary.
 
 Package refresh, distribution upgrade, reboot, and poweroff are disabled in the
 shipped configuration. Enabling a button listener does not enable those actions.
-Each action requires a separate opt-in and a physical confirmation sequence.
+Each final effect requires a separate opt-in. Armed multi-click actions require
+a fresh confirmation sequence; Copy hold-refresh is a separate opt-in gesture.
 The installer never performs any of them.
 
 Read [hardware support](docs/HARDWARE_SUPPORT.md) and the
@@ -174,14 +178,17 @@ services, action opt-ins, verification, and removal.
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install -e '.[test]'
-ruff check .
-python3 -m pytest
+ruff check src tests scripts
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m pytest -p no:cacheprovider
 bash -n scripts/install.sh
-python3 -m compileall -q src tests
+python3 -B -c 'import ast,pathlib; [ast.parse(p.read_text()) for p in pathlib.Path("src").rglob("*.py")]'
 ```
 
-The test suite uses mocks and temporary files, so it does not touch QNAP
-hardware. A clean test run cannot replace validation on the physical chassis.
+Set `TMPDIR` to the runtime-provided scratch directory and
+`PYTHONDONTWRITEBYTECODE=1` before testing. The suite uses AST-selected definitions,
+mandatory inert final effects and scratch-only fixtures, not imported hardware
+daemons. `scripts/install.sh --destdir="$TMPDIR/proxnap-stage"` exercises the
+shared file payload without preflight, services or hardware. A clean test run cannot replace validation on the physical chassis.
 [Validation](docs/VALIDATION.md) records that distinction for each feature.
 [Architecture](docs/ARCHITECTURE.md) describes the service layout, the lock
 model, and the trust boundary.
@@ -190,4 +197,5 @@ Documentation updates are listed in the [changelog](CHANGELOG.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Userspace is MIT. See [LICENSE](LICENSE). Files in `driver-fixes/` retain their
+separate GPL notices and are not installed by the userspace installer.

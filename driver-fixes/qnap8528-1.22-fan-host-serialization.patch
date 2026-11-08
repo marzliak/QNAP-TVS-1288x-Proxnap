@@ -1,0 +1,134 @@
+--- a/src/qnap8528.c
++++ b/src/qnap8528.c
+@@ -60,6 +60,7 @@
+ #include <linux/leds.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
++#include <linux/lockdep.h>
+ #include <linux/platform_device.h>
+ #include <linux/time.h>
+ #include "qnap8528.h"
+@@ -280,11 +281,11 @@
+ 	return ret;
+ }
+ 
+-static int qnap8528_ec_read(u16 command, u8 *data)
++static int __qnap8528_ec_read_locked(u16 command, u8 *data)
+ {
+ 	int ret;
+ 
+-	mutex_lock(&qnap8528_ec_lock);
++	lockdep_assert_held(&qnap8528_ec_lock);
+ 	ret = qnap8528_ec_clear_obf();
+ 	if (ret)
+ 		goto ec_read_out;
+@@ -302,15 +303,24 @@
+ 
+ ec_read_out:
+ 	udelay(50);
++	return ret;
++}
++
++static int qnap8528_ec_read(u16 command, u8 *data)
++{
++	int ret;
++
++	mutex_lock(&qnap8528_ec_lock);
++	ret = __qnap8528_ec_read_locked(command, data);
+ 	mutex_unlock(&qnap8528_ec_lock);
+ 	return ret;
+ }
+ 
+-static int qnap8528_ec_write(u16 command, u8 data)
++static int __qnap8528_ec_write_locked(u16 command, u8 data)
+ {
+ 	int ret;
+ 
+-	mutex_lock(&qnap8528_ec_lock);
++	lockdep_assert_held(&qnap8528_ec_lock);
+ 	ret = qnap8528_ec_send_command(command | 0x8000);
+ 	if (ret)
+ 		goto qnap8528_ec_read_out;
+@@ -322,6 +332,15 @@
+ 	outb(data, QNAP8528_EC_DAT_PORT);
+ qnap8528_ec_read_out:
+ 	udelay(50);
++	return ret;
++}
++
++static int qnap8528_ec_write(u16 command, u8 data)
++{
++	int ret;
++
++	mutex_lock(&qnap8528_ec_lock);
++	ret = __qnap8528_ec_write_locked(command, data);
+ 	mutex_unlock(&qnap8528_ec_lock);
+ 	return ret;
+ }
+@@ -888,15 +907,20 @@
+ 		return -EINVAL;
+ 	}
+ 
+-	ret = qnap8528_ec_read(reg_a, &tmp);
+-	if (ret)
+-		return ret;
++	mutex_lock(&qnap8528_ec_lock);
++	ret = __qnap8528_ec_read_locked(reg_a, &tmp);
++	if (ret)
++		goto rpm_out;
+ 	value = tmp << 8;
+ 
+-	ret = qnap8528_ec_read(reg_b, &tmp);
+-	if (ret)
+-		return ret;
+-	return value | tmp;
++	ret = __qnap8528_ec_read_locked(reg_b, &tmp);
++	if (ret)
++		goto rpm_out;
++	ret = value | tmp;
++
++rpm_out:
++	mutex_unlock(&qnap8528_ec_lock);
++	return ret;
+ }
+ 
+ static int qnap8528_fan_pwm_get(unsigned int fan)
+@@ -948,15 +972,16 @@
+ 		return -EINVAL;
+ 	}
+ 
+-	ret = qnap8528_ec_write(reg_a, 0x10);
+-	if (ret)
+-		return ret;
+-
+-	ret = qnap8528_ec_write(reg_b, value);
+-	if (ret)
+-		return ret;
+-
+-	return 0;
++	mutex_lock(&qnap8528_ec_lock);
++	ret = __qnap8528_ec_write_locked(reg_a, 0x10);
++	if (ret)
++		goto pwm_out;
++
++	ret = __qnap8528_ec_write_locked(reg_b, value);
++
++pwm_out:
++	mutex_unlock(&qnap8528_ec_lock);
++	return ret;
+ }
+ 
+ static int qnap8528_temperature_get(unsigned int sensor)
+@@ -1128,8 +1153,11 @@
+ 
+ static int qnap8528_hwmon_write(struct device *dev, enum hwmon_sensor_types type, u32 attr, int channel, long val)
+ {
+-	if (type == hwmon_pwm)
++	if (type == hwmon_pwm) {
++		if (val < 0)
++			return -ERANGE;
+ 		return qnap8528_fan_pwm_set(channel, (val > 255) ? 255 : val);
++	}
+ 	return -ENOTSUPP;
+ }
+ 

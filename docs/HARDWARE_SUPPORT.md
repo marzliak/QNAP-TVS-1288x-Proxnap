@@ -70,8 +70,9 @@ to `qnap8528/temp1_input`. Rear-fan policy can use SATA drive, chipset, DIMM, an
 qnap8528 system temperatures (`temp6_input` through `temp8_input`).
 
 The rear fans on the reference chassis were unreliable at very low duty. The
-shipped floors, 40% rear and 50% CPU, are cautious starting values. Check every
-tachometer through a cold start and a warm load before lowering them.
+40% rear and 50% CPU floors are enforced by this controller; do not lower them
+to conceal noise or start/stop behavior. Check every tachometer during target
+acceptance; a percentage/readback is not a calibrated airflow guarantee.
 For RPM pulses, inconsistent sensor readings, and CPU power-policy checks, see
 [thermal troubleshooting](TROUBLESHOOTING.md).
 
@@ -112,6 +113,7 @@ before enabling either listener.
 ## Outside this project
 
 Proxnap does not manage storage-controller watchdogs, arbitrary embedded
-controller registers, rescue workflows, dashboards, or host monitoring. Those
-jobs need their own tools and failure handling; they do not belong in a chassis
-control daemon.
+controller registers, rescue workflows, fleet dashboards or CPU power policy.
+Those jobs need their own tools and failure handling. Optional local health and
+metrics collection are supplied, but endpoint/configuration, fleet alerting and
+operational recovery belong to the operator.

@@ -1,0 +1,17 @@
+[Unit]
+Description=Proxnap optional InfluxDB metrics collector
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/opt/proxnap
+EnvironmentFile=/etc/proxnap/metrics.env
+ExecStart=/usr/bin/python3 -m proxnap.runtime metrics
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

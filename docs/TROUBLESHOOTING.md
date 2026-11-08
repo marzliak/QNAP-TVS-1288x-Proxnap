@@ -73,11 +73,12 @@ against a zero limit is not, by itself, evidence that the memory crossed a
 valid thermal limit. Confirm the part's limits and the sensor configuration;
 do not hide the alarm by changing thresholds without that check.
 
-The default rear policy, `storage`, considers more than HDD temperature.
-Chipset, DIMM, and system sensors can therefore raise rear-fan duty while the
-drives remain cool. Use `hdd` only after confirming thermal coverage for every
-populated bay and accepting that the other sensors no longer drive that curve.
-Keep the emergency response intact.
+The shipped rear policy is `hdd`, matching the retained reference policy.
+Confirm thermal coverage for every populated bay; drivetemp alone is not proof
+that every source is a mechanical HDD. Broader `storage` policies can include
+chipset, DIMM and system sensors and raise duty while drives remain cool. Keep
+emergency protection and the CPU50%/rear40% floors intact. Do not add NVMe
+command polling or change CPU power policy merely to conceal fan pulses.
 
 ## CPU power policy and noise
 

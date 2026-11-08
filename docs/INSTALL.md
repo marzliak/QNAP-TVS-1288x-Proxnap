@@ -1,5 +1,8 @@
 # Installation
 
+The file payload is for a verified supported chassis with inactive application services. It refuses active, failed or transitional controllers rather than overwriting live code. A live upgrade or shutdown of an existing fan controller needs a separate thermal-protection and recovery procedure; this installer does not invent one. The direct payload entrypoint enforces the same chassis/root boundary. Uninstall keeps code and units if the final ventilation request fails.
+
+
 Proxnap supports the QNAP TVS-1288X on Proxmox VE 9.x. Install a compatible
 `qnap8528` module first. The TVS-h1688X has not been tested and is refused by the
 model check.
@@ -105,7 +108,7 @@ sudo bash scripts/install.sh --enable-disk-leds
 The installer refuses to enable the service when the repository config has no
 active slot mapping. Install `smartmontools` before enabling this service: the
 installer adds no packages, and when `/usr/sbin/smartctl` is missing the daemon
-reads every mapped bay as a SMART failure and blinks it red.
+reports SMART as unavailable. Unknown SMART does not light a healthy green LED.
 
 ### USB Copy button
 
@@ -119,7 +122,7 @@ Grant only the action you intend to use:
 
 ```bash
 sudo bash scripts/install.sh --enable-copy-button --allow-apt-refresh
-sudo bash scripts/install.sh --enable-copy-button --allow-dist-upgrade
+sudo bash scripts/install.sh --enable-copy-button --allow-apt-refresh --allow-dist-upgrade
 ```
 
 ### Power button
@@ -141,7 +144,10 @@ without console access, a tested backup, and a maintenance window.
 
 ## Identity check
 
-Every command that writes hardware checks DMI first. The accepted strings are
+Every installed entrypoint that writes hardware checks DMI before importing its
+implementation. Use those launchers or `python3 -m proxnap.runtime ENTRYPOINT`;
+the byte-preserved PWM module is an internal implementation, not an alternate
+installation interface. The accepted strings are
 `TVS-1288X` and `TVS-H1288X`; the second is an accepted DMI identity from
 the same 12-bay chassis family, not evidence that every hardware revision has
 been validated. If DMI is blank or generic, the guard accepts only the qnap8528
@@ -164,3 +170,56 @@ sudo bash scripts/install.sh --uninstall --purge-config
 ```
 
 Removal never updates packages, reboots, or powers off the machine.
+
+## Configuration upgrade and compatibility
+
+Code is installed once under `/opt/proxnap/proxnap`; thin commands in
+`/usr/local/sbin` preserve `proxnap-fan-control`, `proxnap-lcd`,
+`proxnap-copy-update`, `proxnap-power-button` and the public LED commands.
+`proxnap-buttons --kind copy|power` dispatches to those same state machines.
+`--failsafe` is translated to the fan core's `--safe`. LCD `--off` and a missing
+`run` subcommand remain supported through the guarded launcher.
+
+The strict fan parser does not silently accept first-release keys such as
+`stall_cycles`. Review retained local configs against `configs/fan-control.conf`
+and validate before changing services:
+
+```bash
+/usr/local/sbin/proxnap-fan-control --config /etc/proxnap/fan-control.conf --check-config
+```
+
+Preserved configuration does not imply unchanged semantics for old click
+thresholds. Read [front-panel controls](FRONT_PANEL.md) before enabling actions.
+The Copy backend accepts old `apt_refresh_enabled`/`apt_upgrade_enabled` keys
+only when their new `short_refresh_enabled`/`upgrade_enabled` equivalents are
+absent. Every installer run writes the new opt-ins explicitly from its flags.
+
+## Optional telemetry
+
+`proxnap-metrics.service` is installed but never enabled automatically. Populate
+`/etc/proxnap/metrics.env` locally with an InfluxDB 2.x endpoint, organization,
+bucket and token before deliberately enabling it. The installer sets mode 0600
+on a newly created environment file. No endpoint or token is shipped. Measurement
+names start with `proxnap_`; `PROXNAP_METRICS_SLOT_MAP` optionally supplies a local
+JSON object mapping device identities to slot labels. Do not commit a real map.
+
+The temperature-aware USB LED command is manual-only: it must not run alongside
+status/Copy writers for the same LED. Legacy ACPI helpers have no service/CLI
+activation and are not a substitute for PWM thermal control.
+
+## Offline file staging
+
+Set `TMPDIR` to your runtime's dedicated scratch directory first. This path
+executes the **same payload writer** as installation, but returns before host
+preflight, unit activation, package commands, logind or hardware access:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 bash scripts/install.sh --destdir="$TMPDIR/proxnap-stage"
+```
+
+The destination must be a non-symlink child of `TMPDIR`; `/`, symlinked paths and
+staged uninstall are refused. The shared writer validates the effective retained
+fan config using the exact pure parser definitions before its first payload write;
+invalid legacy keys/floors must be reviewed rather than silently migrated. Staging installs no driver source, invokes no
+systemctl/modprobe/apt command and enables no services. It is file-layout and
+configuration evidence, not permission to run the staged daemons on a host.

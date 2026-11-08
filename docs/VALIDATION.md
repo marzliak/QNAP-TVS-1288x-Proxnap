@@ -1,50 +1,55 @@
 # Validation
 
-The reference TVS-1288X was running Proxmox VE 9.2.26 and kernel
-`7.0.14-15-pve` on 6 November 2026, after 62 days of uptime. Its five ZFS
-pools were healthy, and fan control, LCD, and status LED services were active.
-The full dated readings are in [REFERENCE_SYSTEM.md](REFERENCE_SYSTEM.md#operating-record).
+## Evidence boundaries
 
-## What the evidence covers
+Physical observations in [REFERENCE_SYSTEM.md](REFERENCE_SYSTEM.md#operating-record)
+belong to the dated reference installation, not an endurance test of this entire
+public package. Source consolidation and passing offline tests do not install any
+new code, update the driver, prove quieter fans or authorize thermal load tests.
 
-Physical checks establish that the interfaces work on the reference chassis.
-Automated tests check this package with mocked hardware and temporary files.
-They do not exercise a real embedded controller, systemd shutdown sequence,
-or sustained thermal load.
-
-The controller installed on the reference machine predates this repository's
-Python package. The operating record belongs to that installed configuration;
-a full deployment and endurance test of this exact package on the chassis
-remain to be done.
-
-| Area | Reference hardware evidence | Public package evidence and limits |
+| Area | Public candidate evidence | Still outside offline acceptance |
 |---|---|---|
-| Proxmox and kernel | 9.2.26 / 7.0.14-15-pve running at the November check | No compatibility claim for a kernel not exercised on the reference machine |
-| Standard I/O | onboard USB ports, installed PCIe/NVMe/SATA devices, and Ethernet interfaces checked during conversion | Supplied by Linux drivers; Proxnap does not implement these drivers |
-| Fans and sensors | both PWM zones, five tachometers, and thermal inputs observed; operational fan service active | Tests cover curve interpolation, fixed mapping, PWM scale, missing sensors, and individual missing/stalled fans |
-| Two-zone fail-safe | the interfaces for both fan zones exist on the chassis | Tests verify full-duty writes and readback through simulated files; physical failure injection and stop-path acceptance for this package remain untested |
-| LCD and its buttons | display, backlight, and button input physically mapped; operational LCD service active | Automated test covers 16-byte text formatting; the complete public daemon still needs chassis acceptance |
-| Status and panel LEDs | status and panel lighting physically mapped; status and static-panel services active | Brightness bounds are tested; physical fault indication and breathing behavior need acceptance with this package |
-| Drive LEDs | activity/color paths physically mapped; monitor inactive at the November check | Implementation requires an explicit bay map; no long-duration public-package hardware test |
-| USB Copy and power input | Linux input paths physically mapped | Tests cover sequence classification, blocked defaults, identity checks, input aliases, and an injected harmless action runner; no real package update, reboot, or poweroff is tested |
-| Buzzer | audibly checked with the original QNAP HAL | Not implemented by Proxnap |
-| TVS-h1688X | not tested | Refused by the identity guard, including conflicting DMI/VPD cases covered by tests |
+| Fan core | byte-preserved reference implementation; fixture config/curves/floors, missing sensors, inventory/cache, immediate rise, descent, quantized PWM readback and fault/stop paths | physical response, acoustic cause and continuous ownership |
+| Optional RPM diagnostics | individual missing/stalled/recovered tachometer regressions | not enabled as continuous PWM-loop polling |
+| LCD | bounded fragmented serial parser; real scratch flocks across cooperating writers; startup, disabled, idle, UI/feedback and cleanup ownership; stale/unknown/recovery cache | UART and target UI acceptance |
+| Copy | actual AST-selected loop with paired events, capture-time confirmation barriers, flood/replay/error negatives and update cleanup | real package/power work |
+| Power | actual AST-selected selector loop with independent sources, aliases, fragment/drop/SYN/reconnect handling | logind and physical shutdown sequencing |
+| Status/metrics | malformed/missing/partial/stale/future source contracts; known critical preservation; SMART exit semantics and no unknown-to-healthy conversion | real InfluxDB/server health and device collection |
+| Disk/panel/blue | mapped namespace validation, tri-state SMART, activity recovery, timing/brightness and optional pulse policies | physical bay/color/timing acceptance |
+| Installation | exact shared file payload staged beneath scratch; default opt-ins, preserving/mutating config, complete module/launcher/unit packaging and symlink/refusal negatives | live installation, service changes or target upgrade |
+| Driver experiments | separate explicit-source RAM harnesses in `driver-fixes/` | not applied or executed against hardware by the userspace installer |
 
-## Differences that matter during installation
+## Run offline userspace checks
 
-The operational controller uses temperature averaging, PWM step/rate limits,
-and a rear-fan policy based on HDD temperatures. This package uses the shipped
-`storage` policy and its own hysteresis. It also adds per-fan stall detection,
-PWM readback checks, and a two-zone full-speed fallback. Its stop fallback
-requests full duty; an older controller's stop policy must not be assumed to
-match it.
+Use a dedicated scratch path, not a system temporary directory or the published
+source tree. Set `TMPDIR` to your runtime-provided scratch directory first.
 
-Do not copy a complete configuration from another controller and assume that
-all keys or safeguards have the same meaning. Read the shipped config and the
-[safety model](SAFETY.md), then follow the
-[installation checks](INSTALL.md#hardware-check). Confirm each fan, sensor,
-indicator, and input on the target chassis before unattended use.
+```bash
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPATH="$PWD/src"
+python3 -B -m pytest -p no:cacheprovider
+ruff check src tests scripts
+bash -n scripts/install.sh
+python3 -B -c 'import ast,pathlib; [ast.parse(p.read_text()) for p in pathlib.Path("src").rglob("*.py")]'
+```
 
-An active status LED service proves the process is running, not that the LED
-is green or that every host service is healthy. Likewise, a zero systemd
-restart counter does not prove an incident-free history.
+The inherited regression modules are also stdlib `unittest` compatible. Run the
+eight named modules separately when pytest is unavailable; the four original
+public function-test files still require pytest. No daemon is imported merely to
+patch it afterward: production-capable fixture execution uses selected AST nodes,
+private module proxies, mandatory inert effects and scratch-only files. Historical
+private Git objects are not required to reproduce public regressions.
+
+## Deployment differences
+
+The fan implementation preserves the reference source bytes. Installed wrappers,
+packaging, action defaults and chassis guard are public integration layers, not
+proof that the reference host consumes them. The public status/LCD/Copy/Power code
+retains the recent offline-tested behavior while replacing host-specific defaults
+and routing power actions through public opt-ins. Metrics labels use `proxnap_` and
+operator-supplied slot mapping, not a private reference inventory.
+
+Legacy first-release fan keys such as `stall_cycles` are intentionally not silently
+accepted by the stricter PWM parser. Review existing configuration against the
+shipped templates and validate it before any target maintenance. There is no
+automatic configuration migration or physical deployment in source consolidation.

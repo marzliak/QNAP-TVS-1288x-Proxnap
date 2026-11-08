@@ -16,12 +16,15 @@ dependencies = []
 test = ["pytest>=8", "ruff>=0.16,<1"]
 
 [project.scripts]
-proxnap-fan-control = "proxnap.fan_control:main"
-proxnap-lcd = "proxnap.lcd:main"
-proxnap-status-led = "proxnap.status_led:main"
-proxnap-panel-led = "proxnap.panel_led:main"
-proxnap-disk-leds = "proxnap.disk_leds:main"
+proxnap-fan-control = "proxnap.runtime:fan_main"
+proxnap-lcd = "proxnap.runtime:lcd_main"
+proxnap-status-led = "proxnap.runtime:status_main"
+proxnap-panel-led = "proxnap.runtime:panel_main"
+proxnap-disk-leds = "proxnap.runtime:disk_main"
 proxnap-buttons = "proxnap.buttons:main"
+proxnap-copy-update = "proxnap.runtime:copy_main"
+proxnap-power-button = "proxnap.runtime:power_main"
+proxnap-metrics = "proxnap.runtime:metrics_main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -35,3 +38,7 @@ addopts = "-q"
 
 [tool.ruff]
 src = ["src"]
+
+# Explicit project rules avoid inheriting unrelated parent-workspace policies.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

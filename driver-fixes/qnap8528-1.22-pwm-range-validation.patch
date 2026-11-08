@@ -1,0 +1,15 @@
+--- a/src/qnap8528.c
++++ b/src/qnap8528.c
+@@ -1128,8 +1128,11 @@
+ 
+ static int qnap8528_hwmon_write(struct device *dev, enum hwmon_sensor_types type, u32 attr, int channel, long val)
+ {
+-	if (type == hwmon_pwm)
++	if (type == hwmon_pwm) {
++		if (val < 0)
++			return -ERANGE;
+ 		return qnap8528_fan_pwm_set(channel, (val > 255) ? 255 : val);
++	}
+ 	return -ENOTSUPP;
+ }
+ 

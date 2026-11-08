@@ -6,7 +6,7 @@ Wants=qnap8528-load-module.service
 [Service]
 Type=simple
 Environment=PYTHONPATH=/opt/proxnap
-ExecStart=/usr/bin/python3 -m proxnap.buttons --kind copy --config /etc/proxnap/copy-button.conf
+ExecStart=/usr/bin/python3 -m proxnap.runtime copy-update --config /etc/proxnap/copy-button.conf
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

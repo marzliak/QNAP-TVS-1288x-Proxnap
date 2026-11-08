@@ -5,7 +5,7 @@ After=multi-user.target
 [Service]
 Type=simple
 Environment=PYTHONPATH=/opt/proxnap
-ExecStart=/usr/bin/python3 -m proxnap.buttons --kind power --config /etc/proxnap/power-button.conf
+ExecStart=/usr/bin/python3 -m proxnap.runtime power-button --config /etc/proxnap/power-button.conf
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

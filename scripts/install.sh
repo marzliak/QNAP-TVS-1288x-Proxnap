@@ -8,6 +8,7 @@ usage() {
     'Modes:' \
     '  --preflight                 inspect prerequisites only' \
     '  --dry-run                   print the installation without changing the host' \
+    '  --destdir=PATH              stage files below TMPDIR; no preflight or services' \
     '  --uninstall                 remove code/units; preserve configuration' \
     '  --purge-config              with --uninstall, also remove /etc/proxnap' \
     '' \
@@ -27,6 +28,7 @@ usage() {
 }
 
 mode=install
+destdir=
 dry_run=false
 purge=false
 enable_disk=false
@@ -40,6 +42,7 @@ allow_poweroff=false
 
 for arg in "$@"; do
   case "$arg" in
+    --destdir=*) destdir="${arg#*=}" ;;
     --preflight) mode=preflight ;;
     --dry-run) dry_run=true ;;
     --uninstall) mode=uninstall ;;
@@ -64,6 +67,18 @@ fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 project_dir="$(cd -- "${script_dir}/.." && pwd)"
+
+# Staging is structurally separated before any host preflight or service call.
+if [[ -n "$destdir" ]]; then
+  if [[ "$mode" != install ]]; then
+    printf '%s\n' '--destdir supports file installation only' >&2
+    exit 2
+  fi
+  stage_args=(--destdir "$destdir")
+  [[ "$dry_run" == false ]] || stage_args+=(--dry-run)
+  exec python3 "${script_dir}/install_payload.py" "${stage_args[@]}" "$@"
+fi
+
 
 print_cmd() {
   printf '+ '
@@ -140,9 +155,17 @@ install_config() {
   fi
 }
 
+verify_uninstall_chassis() {
+  PYTHONPATH="${project_dir}/src" python3 -c 'from proxnap.common import require_supported_model; raise SystemExit(0 if require_supported_model() else 1)'
+}
+
+request_full_speed() {
+  PYTHONPATH=/opt/proxnap /usr/bin/python3 -m proxnap.runtime fan-control --safe
+}
+
 uninstall_all() {
   local units=(
-    proxnap-power-button.service proxnap-copy-button.service
+    proxnap-power-button.service proxnap-copy-button.service proxnap-metrics.service
     proxnap-disk-leds.service proxnap-panel-breath.service
     proxnap-panel-static.service proxnap-status-led.service
     proxnap-lcd.service proxnap-fan-control.service
@@ -151,11 +174,21 @@ uninstall_all() {
   if [[ "$dry_run" == true ]]; then
     print_cmd systemctl disable --now "${units[@]}"
   else
+    if ! verify_uninstall_chassis; then
+      printf 'Uninstall refused: unsupported chassis.\n' >&2
+      return 1
+    fi
     systemctl disable --now "${units[@]}" >/dev/null 2>&1 || true
-    PYTHONPATH=/opt/proxnap /usr/bin/python3 -m proxnap.fan_control --failsafe >/dev/null 2>&1 || true
+    if ! request_full_speed; then
+      printf 'Uninstall stopped: ventilation request failed; code and units retained for recovery.\n' >&2
+      return 1
+    fi
   fi
   for unit in "${units[@]}"; do
     run rm -f "/etc/systemd/system/${unit}"
+  done
+  for name in fan-control lcd copy-update copy-button power-button status-led panel-led panel-breath disk-leds disk-led-monitor blue-temp-breath metrics; do
+    run rm -f "/usr/local/sbin/proxnap-${name}"
   done
   run rm -rf /opt/proxnap
   run rm -f /etc/systemd/logind.conf.d/proxnap-power-button.conf
@@ -208,25 +241,9 @@ if [[ "$enable_disk" == true ]] && ! has_disk_mapping; then
   exit 1
 fi
 
-run install -d -m 0755 /opt/proxnap /opt/proxnap/proxnap /etc/proxnap /etc/systemd/system
-for source in "${project_dir}"/src/proxnap/*.py; do
-  run install -m 0644 "$source" "/opt/proxnap/proxnap/$(basename "$source")"
-done
-for config in fan-control.conf lcd.conf status-led.conf panel-led.conf disk-leds.conf copy-button.conf power-button.conf; do
-  install_config "$config"
-done
-for unit in "${project_dir}"/systemd/*.service; do
-  run install -m 0644 "$unit" "/etc/systemd/system/$(basename "$unit")"
-done
-
-set_config_bool /etc/proxnap/copy-button.conf enabled "$enable_copy"
-set_config_bool /etc/proxnap/copy-button.conf apt_refresh_enabled "$allow_refresh"
-set_config_bool /etc/proxnap/copy-button.conf apt_upgrade_enabled "$allow_upgrade"
-set_config_bool /etc/proxnap/copy-button.conf reboot_enabled "$allow_reboot"
-set_config_bool /etc/proxnap/copy-button.conf poweroff_enabled "$allow_poweroff"
-set_config_bool /etc/proxnap/power-button.conf enabled "$enable_power"
-set_config_bool /etc/proxnap/power-button.conf reboot_enabled "$allow_reboot"
-set_config_bool /etc/proxnap/power-button.conf poweroff_enabled "$allow_poweroff"
+payload_args=(--destdir / --live-install)
+[[ "$dry_run" == false ]] || payload_args+=(--dry-run)
+run python3 "${script_dir}/install_payload.py" "${payload_args[@]}" "$@"
 
 run systemctl daemon-reload
 base_units=(qnap8528-load-module.service proxnap-fan-control.service proxnap-lcd.service proxnap-status-led.service)

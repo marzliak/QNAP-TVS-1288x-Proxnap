@@ -1,11 +1,15 @@
 from pathlib import Path
 
-from proxnap import lcd, panel_led
+from offline_loader import load_source
+
+ROOT = Path(__file__).resolve().parents[1]
+lcd = load_source(ROOT / "src/proxnap/lcd.py", "published_lcd_tests")
+panel_led = load_source(ROOT / "src/proxnap/panel_led.py", "published_panel_tests")
 
 
 def test_lcd_text_is_exactly_sixteen_bytes() -> None:
-    assert len(lcd.fit("short")) == 16
-    assert lcd.fit("0123456789abcdefghijkl") == b"0123456789abcdef"
+    assert len(lcd.fit("short").encode("ascii")) == 16
+    assert lcd.fit("0123456789abcdefghijkl") == "0123456789abcdef"
 
 
 def test_panel_settings_are_clamped(tmp_path: Path) -> None:

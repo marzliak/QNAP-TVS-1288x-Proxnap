@@ -1,75 +1,77 @@
 # Safety
 
-Proxnap writes fan PWM and chassis indicators as root. A bad mapping or an
-unexpected driver response can overheat the machine. Keep firmware and Proxmox
-thermal shutdown protection active, and watch every temperature and tachometer
-during the first deployment.
+Proxnap writes fan PWM and chassis indicators as root. Preserve firmware thermal
+protection and an external console/recovery path. Offline tests do not validate
+physical airflow, noise, controller timing or shutdown sequencing.
 
-Every hardware command requires an accepted 12-bay DMI identity (`TVS-1288X` or
-`TVS-H1288X`) or the qnap8528 VPD pair `Q05W0` and `Q05K0`. DMI acceptance is
-not a claim that every hardware revision has been validated, and the runtime has
-no bypass for the TVS-h1688X.
+Installed hardware-facing commands use the TVS-1288X/TVS-H1288X DMI guard or, for
+generic DMI only, the tested Q05W0/Q05K0 VPD pair. Explicit unsupported DMI wins
+over conflicting VPD. The TVS-h1688X is refused. Internal modules are not alternate
+unguarded installation interfaces; use the guarded installed/console entrypoints.
 
 ## Fan fallback
 
-Fan-zone names are fixed in the code. Configuration cannot redirect a fan write
-to an arbitrary sysfs path.
+CPU is fixed to `pwm7`, rear to `pwm1`. Configuration cannot remap those targets.
+Continuous floors are CPU **50%**, rear **40%**. Configured manual values, profiles
+and descent smoothing cannot override those floors or suppress a raw-temperature
+increase. The stop/protection request is temporarily **100%**, never a 25% policy.
 
-The controller requests `pwm1=255` and `pwm7=255` after:
+The controller retains sensor inventory across reloads, rejects malformed,
+non-finite, duplicate or unknown configuration, invalidates expired/reloaded sensor
+results and does not silently adopt a disappearing source as healthy. Temperature
+increases/emergencies act immediately; averaging, step and interval limits govern
+controlled descent only. Failed writes/readback, missing required temperatures,
+invalid config and orderly stop request full duty on both zones. Both zones are
+attempted even when one write fails, under the same actuation lock.
 
-1. SIGTERM, SIGINT, or a normal daemon stop;
-2. an unhandled loop or configuration error;
-3. a failed PWM write or readback check;
-4. loss of a configured temperature source;
-5. an expected tachometer that is missing, unreadable, or stuck at zero for the
-   configured grace period.
+Missing hwmon or a failed write can prevent actual cooling: a software request is
+not a physical guarantee. Quantized readback proves only the driver-exposed value.
+It does not prove ownership, tachometer response or an EC manual-mode lease.
 
-If the qnap8528 hwmon interface disappears, software cannot command full speed.
-The process exits with an error, records a visible fault when it can, and lets
-systemd retry. Firmware protection is still necessary.
-
-Do not lower a fan floor until every fan has survived cold starts and sustained
-load at that setting. Check that both curves reach full duty at their critical
-temperature.
+Per-tachometer stall/missing diagnostics are retained in `fan_diagnostics`, but
+**continuous RPM stall polling is not part of the default PWM loop**. Do not assume
+a stalled fan triggers an automatic trip through that optional helper. Monitor
+all five tachometers during target acceptance; no additional continuous EC polling
+was enabled to conceal unresolved physical fan pulses.
 
 ## Writer locks
 
-Fan, panel, status, and disk LED writes share
-`/run/lock/proxnap-ec.lock`. LCD writers use
-`/run/lock/proxnap-lcd.lock`. The locks reduce conflicting writes between Proxnap
-services, but they do not change the driver's behavior and cannot coordinate
-unrelated tools.
+PWM: `/run/proxnap-fan-control.lock`; LCD messages: `/run/proxnap-lcd-message.lock`;
+actions: `/run/lock/proxnap-action.lock`. LCD ownership includes initialization,
+delays, frames and cleanup, and losing ownership cancels hidden gesture progress.
+Lock failure must not cause unprotected writes. These are scoped advisory locks,
+not a guarantee of kernel-level EC transaction atomicity or third-party exclusion.
 
-Static panel brightness is the default. Breathing mode changes the global level
-repeatedly and can produce visible or audible controller side effects. The two
-systemd units conflict so they cannot run together.
+Use static panel brightness unless repeated EC writes are justified. Optional
+breathing, disk monitoring and USB LED effects add traffic. Do not run competing
+writers for the USB/status indication. Compound driver locking remains an
+experimental separate deliverable; the installer never applies driver fixes.
 
 ## Buttons
 
-Both button daemons ship with `enabled=false`. Package refresh, distribution
-upgrade, reboot, and poweroff also ship disabled. Turning on a listener does not
-grant any action.
+Listeners, refresh, upgrade, reboot and poweroff are disabled by default. Each
+final-effect permission is checked in its backend, including LCD-dispatched power
+requests. A separate confirmation sequence is required for armed multi-click
+requests; capture-time barriers reject clicks queued during feedback. Copy hold
+refresh is a distinct explicit opt-in gesture. Power pairs/confirmations cannot
+span devices, drops or reconnect boundaries.
 
-An allowed action still needs an arm sequence, a separate confirmation sequence
-inside a short window, and the global action lock. The handler chooses from a
-fixed command list; configuration cannot supply a shell command.
-
-Package work can still leave the host unbootable. Use a console, a verified
-backup, and a maintenance window, and review package changes manually before
-enabling that path.
-
-When the custom power listener is enabled, the installer tells systemd-logind to
-ignore its own power-key action. Removal deletes that override.
+Root configuration can supply update command arguments and optional buzzer hooks;
+it is trusted administrative input, not a sandbox. The update runner uses argv,
+not shell evaluation. Package changes can leave a host unbootable. Review them,
+keep a verified backup/console, and use a maintenance window. No package update,
+reboot or poweroff has been executed by the offline test suite.
 
 ## Recovery
 
-If the fans do not behave as expected, stop optional LED and button services and
-request full speed directly:
+With console access and the correct driver present, use the guarded command:
 
 ```bash
-sudo env PYTHONPATH=/opt/proxnap /usr/bin/python3 -m proxnap.fan_control --failsafe
+sudo /usr/local/sbin/proxnap-fan-control --safe
+# Historical spelling remains supported by the same launcher:
+sudo /usr/local/sbin/proxnap-fan-control --failsafe
 ```
 
-If readback does not return `255` for both zones, shut the machine down through a
-controlled external method. Do not reload the controller until the driver or
-hardware fault has been understood.
+If full-duty readback cannot be verified on both zones, use a controlled external
+shutdown and investigate the hardware/driver before unattended operation. Stopping
+optional effects is not permission to stop cooling or lower thermal safeguards.

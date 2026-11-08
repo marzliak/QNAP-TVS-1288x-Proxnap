@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import selectors
 import signal
 import struct
 import subprocess
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -151,84 +149,16 @@ def deduplicate_input_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(result)
 
 
-def read_events(fd: int, key_code: int) -> int:
-    data = os.read(fd, EVENT.size * 32)
-    count = 0
-    for offset in range(0, len(data) - EVENT.size + 1, EVENT.size):
-        _sec, _usec, event_type, code, value = EVENT.unpack_from(data, offset)
-        if event_type == EV_KEY and code == key_code and value == 0:
-            count += 1
-    return count
-
-
 def run(path: str, kind: str) -> int:
-    policy = load_policy(path, kind)
-    if not policy.enabled:
-        print(f"{kind} button disabled by configuration", flush=True)
-        return 0
-    selector = selectors.DefaultSelector()
-    handles: list[int] = []
-    for input_path in deduplicate_input_paths(policy.input_paths):
-        try:
-            fd = os.open(input_path, os.O_RDONLY | os.O_NONBLOCK)
-        except OSError:
-            print(f"INPUT unavailable: {input_path}", flush=True)
-            continue
-        selector.register(fd, selectors.EVENT_READ)
-        handles.append(fd)
-    if not handles:
-        selector.close()
-        return 1
-
-    clicks: list[float] = []
-    confirms: list[float] = []
-    pending: str | None = None
-    pending_until = 0.0
+    """Compatibility dispatcher; event state machines live in one module each."""
+    import sys
+    from . import runtime
+    old = sys.argv
     try:
-        while RUNNING:
-            now = time.monotonic()
-            if pending and now > pending_until:
-                print(f"ACTION CANCELLED: {pending} confirmation timeout", flush=True)
-                pending = None
-                confirms.clear()
-            if not pending and clicks and now - clicks[-1] >= policy.settle_seconds:
-                clicks = [stamp for stamp in clicks if now - stamp <= policy.sequence_window]
-                action = action_for_count(len(clicks), policy, kind)
-                print(f"BUTTON sequence: {len(clicks)} click(s), action={action or 'none'}", flush=True)
-                clicks.clear()
-                if action:
-                    if not action_allowed(action, policy):
-                        print(f"ACTION BLOCKED: {action} is disabled in configuration", flush=True)
-                    else:
-                        pending = action
-                        pending_until = now + policy.confirm_window
-                        confirms.clear()
-                        print(f"ACTION ARMED: {action}; {policy.confirm_count} confirmation clicks required", flush=True)
-            for key, _mask in selector.select(timeout=0.2):
-                try:
-                    releases = read_events(key.fd, policy.key_code)
-                except (BlockingIOError, OSError):
-                    continue
-                for _ in range(releases):
-                    stamp = time.monotonic()
-                    if pending:
-                        confirms.append(stamp)
-                        confirms = [value for value in confirms if stamp - value <= policy.confirm_window]
-                        if len(confirms) >= policy.confirm_count:
-                            action = pending
-                            pending = None
-                            confirms.clear()
-                            execute_action(action, policy)
-                    else:
-                        clicks.append(stamp)
-                        clicks = [value for value in clicks if stamp - value <= policy.sequence_window]
+        sys.argv = [old[0], "copy-update" if kind == "copy" else "power-button", "--config", path]
+        return runtime.main()
     finally:
-        for fd in handles:
-            if fd in selector.get_map():
-                selector.unregister(fd)
-            os.close(fd)
-        selector.close()
-    return 0
+        sys.argv = old
 
 
 def main() -> int:

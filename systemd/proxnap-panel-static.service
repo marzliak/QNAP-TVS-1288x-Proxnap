@@ -8,7 +8,7 @@ Conflicts=proxnap-panel-breath.service
 Type=oneshot
 RemainAfterExit=yes
 Environment=PYTHONPATH=/opt/proxnap
-ExecStart=/usr/bin/python3 -m proxnap.panel_led --config /etc/proxnap/panel-led.conf --static
+ExecStart=/usr/bin/python3 -m proxnap.runtime panel-led --config /etc/proxnap/panel-led.conf --static
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
