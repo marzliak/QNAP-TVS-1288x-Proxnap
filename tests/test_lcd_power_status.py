@@ -29,7 +29,9 @@ ALIAS_A = "/dev/input/by-path/offline-power-a"
 ALIAS_B = "/dev/input/by-path/offline-power-b"
 EVENT = struct.Struct("llHHi")
 NAMES = {"_PowerStatusInputs", "_PowerStatusPopup", "_power_input_identity",
-         "_power_status_pages", "load_settings", "parse_bool", "parse_float", "parse_int", "parse_csv"}
+         "_power_status_pages", "_status_ascii", "_status_causes", "_status_seconds",
+         "_status_unit_id", "_status_scroll_timeline",
+         "load_settings", "parse_bool", "parse_float", "parse_int", "parse_csv"}
 
 
 def event(stamp=100.0, value=1, kind=1, code=116):

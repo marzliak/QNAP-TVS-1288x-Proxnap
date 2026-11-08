@@ -41,6 +41,23 @@ patch it afterward: production-capable fixture execution uses selected AST nodes
 private module proxies, mandatory inert effects and scratch-only files. Historical
 private Git objects are not required to reproduce public regressions.
 
+## LCD scrolling compatibility checks
+
+`tests/test_lcd_status_scroll.py` exercises the actual AST-selected snapshot
+parser, presentation/timeline, settings, UI and daemon loop. It reuses mandatory
+inert input/UART/worker/effect providers, fake monotonic clocks, scratch flocks and
+unique RAM-only abstract sockets. There is no production hardware/control call.
+
+The suite checks default three-argument legacy compatibility; exact initial,
+step, final-window and end-pause boundaries; automatic cause progression; Unicode
+ASCII normalization; warning/critical/unknown priority and stale/invalid negatives;
+exact per-unit aliases and faithful fallbacks; finite/clamped settings; text/count/
+duration caps with explicit omission notices; changed-frame-only writes; fixed
+HOME-frame return; cancellation, disabled/rebound inputs/endpoints, external
+ownership and fresh navigation boundaries. The existing Copy-to-IPC-to-LCD and
+maintenance dispatch regressions also run unchanged with the default pager.
+Physical readability, cadence and return still require the operator's panel test.
+
 ## Deployment differences
 
 The fan implementation preserves the reference source bytes. Installed wrappers,

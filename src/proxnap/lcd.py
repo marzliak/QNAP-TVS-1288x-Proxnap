@@ -158,6 +158,11 @@ class Settings:
     power_status_enabled: bool = False
     power_status_inputs: tuple[str, ...] = ()
     power_status_page_seconds: float = 3.0
+    status_scroll_enabled: bool = False
+    status_scroll_step_seconds: float = 0.6
+    status_scroll_pause_seconds: float = 1.5
+    status_scroll_max_seconds: float = 60.0
+    status_labels: dict[str, str] | None = None
     copy_status_enabled: bool = False
     copy_status_socket: str = "@proxnap-lcd-status"
     copy_update_config: str = COPY_UPDATE_CONFIG
@@ -231,8 +236,11 @@ def read_config(path: str) -> dict[str, str]:
         line = line.split("#", 1)[0].strip()
         if not line or "=" not in line:
             continue
-        key, value = [part.strip() for part in line.split("=", 1)]
-        config[key] = value
+        key, value = line.split("=", 1)
+        # Human labels bind an exact unit ID, including any invalid whitespace.
+        if not key.startswith("status_label."):
+            key = key.strip()
+        config[key] = value.strip()
     return config
 
 
@@ -295,7 +303,38 @@ def load_settings(path: str) -> Settings:
     ))[:8]
     seconds = parse_float(raw.get("power_status_page_seconds", "3.0"), 3.0)
     settings.power_status_page_seconds = seconds if math.isfinite(seconds) and 1 <= seconds <= 10 else 3.0
+    settings.status_scroll_enabled = parse_bool(raw.get("status_scroll_enabled", "false"), False)
+    for key, default, low, high in (
+        ("status_scroll_step_seconds", 0.6, 0.6, 2.0),
+        ("status_scroll_pause_seconds", 1.5, 1.0, 5.0),
+        ("status_scroll_max_seconds", 60.0, 10.0, 60.0),
+    ):
+        setattr(settings, key, _status_seconds(raw.get(key, str(default)), default, low, high))
+    settings.status_labels = {
+        key[len("status_label."):]: value
+        for key, value in raw.items()
+        if key.startswith("status_label.") and _status_unit_id(key[len("status_label."):])
+        and value.strip() and len(value) <= 512
+        and all(ord(c) >= 32 and ord(c) != 127 for c in value)
+    }
     return settings
+
+
+def _status_seconds(value, default: float, low: float, high: float) -> float:
+    """Finite clamped timings, also safe for directly constructed Settings."""
+    try:
+        number = float(value)
+    except (ValueError, TypeError, OverflowError):
+        return default
+    return max(low, min(high, number)) if math.isfinite(number) else default
+
+
+def _status_unit_id(value: str) -> bool:
+    # Validate the literal identifier: never strip, case-fold or repair a label key.
+    return (0 < len(value) <= 255 and re.fullmatch(
+        r"(?:[A-Za-z0-9:_.@-]|\\x[0-9A-Fa-f]{2})+\.(?:service|socket|target|device|mount|automount|swap|timer|path|slice|scope)",
+        value,
+    ) is not None)
 
 
 @contextmanager
@@ -992,9 +1031,62 @@ class _PowerStatusInputs:
         return requested
 
 
-def _power_status_pages() -> list[tuple[str, str]]:
-    """Current indicator snapshot, bounded to 64K characters and 32 2x16 pages."""
-    unknown = [("Sem dados", "Desconhecido")]
+def _status_ascii(message: str) -> str:
+    normalized = unicodedata.normalize("NFKD", message)
+    clean = "".join(c for c in normalized if not unicodedata.combining(c))
+    clean = clean.encode("ascii", "replace").decode("ascii")
+    return " ".join("".join(c if 32 <= ord(c) <= 126 else " " for c in clean).split())
+
+
+def _status_causes(title: str, messages: list[str], settings: Settings) -> list[tuple[str, str]]:
+    """Presentation only; raw snapshot and exact identifiers are never rewritten."""
+    causes = []
+    for message in messages:
+        if message.startswith("failed systemd units: "):
+            units = message[len("failed systemd units: "):].split(", ")
+            if all(_status_unit_id(unit) for unit in units):
+                texts = [(settings.status_labels or {}).get(unit) or f"Servico em falha: {unit}"
+                         for unit in units]
+            else:
+                texts = [message]  # malformed identifiers are not repaired or aliased
+        else:
+            exact = {
+                "qnap8528 module missing": "Modulo qnap8528 ausente",
+                "root filesystem is read-only": "Sistema raiz somente leitura",
+                "update running": "Atualizacao em andamento",
+                "reboot required": "Reinicio necessario",
+                "disk configuration unavailable": "Configuracao de discos indisponivel",
+                "temperature readings unavailable": "Leituras de temperatura indisponiveis",
+                "package update check unavailable": "Consulta de atualizacoes indisponivel",
+            }
+            text = exact.get(message, message)
+            for prefix, translated in (
+                ("configured disk unavailable: ", "Disco configurado indisponivel: "),
+                ("temperature unavailable: ", "Temperatura indisponivel: "),
+                ("systemd failed-unit query unavailable ", "Consulta de servicos indisponivel "),
+                ("zfs: ", "ZFS: "),
+                ("temperature ", "Temperatura "),
+            ):
+                if message.startswith(prefix):
+                    text = translated + message[len(prefix):]
+                    break
+            for suffix, translated in ((" package updates", " atualizacoes de pacotes"),
+                                       (" security updates", " atualizacoes de seguranca")):
+                if message.endswith(suffix) and message[:-len(suffix)].isdigit():
+                    text = message[:-len(suffix)] + translated
+            texts = [text]
+        for text in texts:
+            # One extra character/cause is a sentinel, not claimed as displayed.
+            causes.append((title.upper(), (_status_ascii(text) or "Dados indisponiveis")[:513]))
+            if len(causes) == 33:
+                return causes
+    return causes
+
+
+def _power_status_pages(settings: Settings | None = None) -> list[tuple[str, str]]:
+    """One validated snapshot; legacy pages or opt-in bounded human causes."""
+    scroll = settings is not None and settings.status_scroll_enabled
+    unknown = [("SEM DADOS", "Dados indisponiveis")] if scroll else [("Sem dados", "Desconhecido")]
     try:
         with open(STATUS_STATE_FILE, "r", encoding="utf-8") as stream:
             raw = stream.read(65537)
@@ -1018,19 +1110,18 @@ def _power_status_pages() -> list[tuple[str, str]]:
         if status == "critical" and reasons:
             title, messages = "Critico", reasons
         elif unavailable:
-            return unknown
+            return _status_causes("SEM DADOS", unavailable, settings) if scroll and settings is not None else unknown
         elif status == "warning" and warnings and not reasons:
             title, messages = "Aviso", warnings
         elif status == "ok" and not reasons and not warnings:
-            return [("Estado atual", "Tudo OK")]
+            return [("ESTADO ATUAL", "Tudo OK")] if scroll else [("Estado atual", "Tudo OK")]
         else:
             return unknown
+        if scroll and settings is not None:
+            return _status_causes(title, messages, settings)
         lines = []
         for message in messages:
-            normalized = unicodedata.normalize("NFKD", message)
-            clean = "".join(c for c in normalized if not unicodedata.combining(c))
-            clean = clean.encode("ascii", "replace").decode("ascii")
-            clean = " ".join("".join(c if 32 <= ord(c) <= 126 else " " for c in clean).split())
+            clean = _status_ascii(message)
             for line in textwrap.wrap(clean, width=LCD_WIDTH):
                 lines.append(line)
                 if len(lines) > 32:
@@ -1040,13 +1131,51 @@ def _power_status_pages() -> list[tuple[str, str]]:
         return unknown
 
 
+def _status_scroll_timeline(causes, step: float, pause: float, maximum: float):
+    """Bounded absolute timeline; no timers, sleeps or writes in the renderer."""
+    def duration(text):
+        return 2 * pause + max(0, len(text) - LCD_WIDTH - 1) * step
+
+    clipped = any(len(text) > 512 for _, text in causes)
+    limited = len(causes) > 32 or clipped or sum(duration(text) for _, text in causes) > maximum
+    budget = maximum - (2 * pause if limited else 0)
+    timeline = []
+    end = 0.0
+    count = min(32, len(causes))
+    for title, body in causes[:31 if limited else 32]:
+        text = body[:512]
+        remaining = budget - end
+        if remaining < 2 * pause:
+            break
+        if duration(text) > remaining:
+            steps = 1 + math.floor((remaining - 2 * pause) / step)
+            text = text[:LCD_WIDTH + steps]
+        end = min(budget, end + duration(text))
+        heading = f"{title} {len(timeline) + 1}/{count}{'+' if limited else ''}"
+        timeline.append((end, heading, text))
+        if len(text) < len(body):
+            break
+    if limited:
+        # Reserve a complete visible notice, even when no cause fits the budget.
+        end = min(maximum, end + 2 * pause)
+        timeline.append((end, f"{causes[0][0]} MAIS", "Mais..."))
+    return timeline
+
+
 class _PowerStatusPopup:
     """Information only. Freeze safe navigation; never replay administrative UI."""
 
-    def __init__(self, ui, now: float, seconds: float):
-        self.pages = _power_status_pages()
+    def __init__(self, ui, now: float, seconds: float, settings: Settings | None = None):
+        self.scroll = settings is not None and settings.status_scroll_enabled
+        self.pages = _power_status_pages(settings) if self.scroll else _power_status_pages()
+        self.power_status_inputs = settings.power_status_inputs if settings is not None else ()
         self.started = now
         self.seconds = seconds if math.isfinite(seconds) and 1 <= seconds <= 10 else 3.0
+        if self.scroll and settings is not None:
+            self.step = _status_seconds(settings.status_scroll_step_seconds, 0.6, 0.6, 2.0)
+            self.pause = _status_seconds(settings.status_scroll_pause_seconds, 1.5, 1.0, 5.0)
+            maximum = _status_seconds(settings.status_scroll_max_seconds, 60.0, 10.0, 60.0)
+            self.timeline = _status_scroll_timeline(self.pages, self.step, self.pause, maximum)
         self.manual_remaining = max(0.0, ui.manual_until - now)
         if ui.mode not in {"home", "cover", "section"}:
             ui.go_home(now)
@@ -1057,12 +1186,28 @@ class _PowerStatusPopup:
         ui.reset_press()
 
     def lines(self, now: float) -> tuple[str, str] | None:
-        index = int(max(0.0, now - self.started) / self.seconds)
+        elapsed = max(0.0, now - self.started)
+        if self.scroll:
+            start = 0.0
+            for end, heading, text in self.timeline:
+                if elapsed < end:
+                    local = elapsed - start
+                    offset = (0 if local < self.pause else
+                              min(max(0, len(text) - LCD_WIDTH),
+                                  1 + math.floor((local - self.pause + 1e-9) / self.step)))
+                    return heading, text[offset:offset + LCD_WIDTH]
+                start = end
+            return None
+        index = int(elapsed / self.seconds)
         return self.pages[index] if index < len(self.pages) else None
 
     def finish(self, ui, now: float):
         ui.reset_press()
-        ui.manual_until = now + self.manual_remaining if self.manual_remaining else 0.0
+        if self.scroll:
+            # Always return to safe home, preserving the operator's fixed frame.
+            ui.go_home(now)
+        else:
+            ui.manual_until = now + self.manual_remaining if self.manual_remaining else 0.0
 
 
 class InputButtons:
@@ -1882,9 +2027,12 @@ def run(args) -> int:
                 elif copy_receiver is not None:
                     copy_receiver.close()
                     copy_receiver = None
-                popup_disabled = ((popup_source == "power" and not settings.power_status_enabled)
-                                  or (popup_source == "copy" and (not settings.copy_status_enabled or copy_changed)))
-                if power_popup is not None and (not owned or not settings.enabled or popup_disabled or copy_notice == "cancel"):
+                popup_disabled = ((popup_source == "power" and (
+                    not settings.power_status_enabled or (power_popup is not None
+                    and power_popup.power_status_inputs != settings.power_status_inputs)))
+                    or (popup_source == "copy" and (not settings.copy_status_enabled or copy_changed)))
+                if power_popup is not None and (not owned or not settings.enabled or popup_disabled
+                                                or copy_notice == "cancel"):
                     power_popup.finish(ui, mono)
                     power_popup = None
                     popup_source = None
@@ -1939,7 +2087,7 @@ def run(args) -> int:
 
                         if (power_request or copy_notice == "status") and power_popup is None:
                             ignore_until_release = ignore_until_release or bool(ui.press_mask)
-                            power_popup = _PowerStatusPopup(ui, mono, settings.power_status_page_seconds)
+                            power_popup = _PowerStatusPopup(ui, mono, settings.power_status_page_seconds, settings)
                             popup_source = "copy" if copy_notice == "status" else "power"
                             lcd.backlight(True)
                             last_lines = None
@@ -1962,7 +2110,8 @@ def run(args) -> int:
                                 ignore_until_release = bool(buttons[-1])
                             ui.reset_press()
                             last_activity = mono
-                            lcd.write_lines(*popup_lines)
+                            if not power_popup.scroll or popup_lines != last_lines:
+                                lcd.write_lines(*popup_lines)
                             last_lines = popup_lines
                             last_render = mono
                         else:

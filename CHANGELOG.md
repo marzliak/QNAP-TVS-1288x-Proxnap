@@ -2,6 +2,16 @@
 
 ## Unreleased — status availability and configurable metrics
 
+- Add opt-in readable LCD status scrolling: fixed Portuguese severity/cause
+  header, one-character 16-column body windows, initial/final pauses and automatic
+  safe-HOME return with fixed-frame preservation. The legacy pager remains the
+  default; finite clamped timings, bounded causes/text and a total 60-second cap
+  reserve an explicit `Mais...` notice for any omitted content.
+  Exact private `status_label.<unit ID>` aliases affect presentation only;
+  unavailable configured disks remain `SEM DADOS`, not failed or healthy disks.
+  Reuse snapshot validation, UART and IPC; preserve ownership, fresh navigation
+  and all maintenance/energy guards. AST/fake-clock/socket tests are offline,
+  not deployment or physical scrolling acceptance.
 - Add opt-in isolated short Copy click status through a local Linux abstract
   datagram socket between the existing input and LCD owners. Exactly one released
   click waits for the existing settle; every new valid press cancels the popup.

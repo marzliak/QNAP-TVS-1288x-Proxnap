@@ -58,8 +58,9 @@ retain two FDs for the same device. There is no exclusive grab or writing ioctl.
 Unplug/EOF/errors close the FD and retry after two seconds. Reloading configuration
 preserves unchanged FDs and closes removed/disabled inputs.
 
-A fresh press wakes the backlight and displays `Critico` or `Aviso` with numbered
-16-column reason pages. Fixed labels are Portuguese ASCII; producer reason text
+By default (`status_scroll_enabled=false`), a fresh press wakes the backlight and
+shows `Critico` or `Aviso` with numbered 16-column reason pages. Fixed labels are
+Portuguese ASCII; producer reason text
 is ASCII-normalized and wrapped, not silently cut to the first 16 characters.
 Critical reasons take precedence over unavailable sources. Warnings use the
 `warnings` list, not critical reasons. `Tudo OK` requires a coherent fresh `ok`
@@ -133,7 +134,8 @@ kernel credential record with UID0. Unknown, truncated, unauthenticated, future,
 pre-bind, over-two-second-old and replayed timestamps are rejected. At most 16
 datagrams are drained per iteration; exhausting that budget discards any status
 result rather than displaying an uncertain request and invalidates the remaining
-captured backlog. Only an authenticated cancel can cancel an existing popup.
+captured backlog. An authenticated Copy cancel dismisses any informational
+popup, including one requested by Power: maintenance feedback takes priority.
 
 Sending is nonblocking/best effort, never a command or external LCD-write fallback.
 A missing/busy receiver cannot abort maintenance; one bounded result is logged per
@@ -158,6 +160,81 @@ Offline tests exercise unique abstract sockets and the actual AST-isolated Copy
 and LCD loops with inert hardware/final-action providers. They do **not** prove the
 physical Copy binding, a visible message, automatic return on real hardware, or
 deployment of this package. Physical acceptance remains a separate operator gate.
+
+## Readable automatic status scrolling (opt-in)
+
+The same popup can show a fixed severity/cause header and automatically scroll
+only the second line. This is presentation in the existing LCD owner, not a new
+service, input reader, library, serial protocol or acknowledgement mechanism.
+The legacy pager above remains the exact default. Enabling scrolling alone does
+not enable either Copy or Power status and does not authorize maintenance.
+
+```ini
+# lcd.conf: shipped values; explicitly set true to opt in
+status_scroll_enabled=false
+status_scroll_step_seconds=0.6
+status_scroll_pause_seconds=1.5
+status_scroll_max_seconds=60
+# Optional example only, replaced by a locally selected exact unit ID:
+# status_label.example-prepare.service=Falha ao preparar o driver
+```
+
+For example, `CRITICO 1/2` remains fixed while a human-readable Portuguese cause
+slides through a 16-column window. The index counts causes, not wrapped fragments;
+each valid unit in `failed systemd units: ...` becomes a separate cause. The first
+window stays for 1.5 seconds; the first shift happens then, followed by one
+character every 0.6 seconds. The final full window stays for 1.5 seconds. A short
+cause stays still for both pauses (three seconds by default). Causes advance
+once automatically, without another click. After the last cause, the popup returns
+to safe HOME, including the operator's fixed home frame; pending actions and held
+navigation never resume. Repeated status requests do not restart/extend the run.
+
+Timings must be finite. Invalid/nonfinite values use the displayed defaults;
+finite values clamp to 0.6–2 seconds per step (no faster UART traffic), 1–5 seconds
+per pause, and 10–60 seconds total. The nonblocking monotonic timeline expires
+within that total budget; normal loop scheduling/UART latency still applies.
+Only changed scrolling frames are sent through the existing serial write path;
+there is no per-step sleep or firmware scrolling command. Legacy-page rendering
+and normal navigation retain their existing refresh behavior.
+
+At most 32 timeline entries and 512 characters per cause are presented, subject
+to the total budget. A cause may be cut short and later causes omitted. In every
+such case, the count gains `+` and a final `Mais...` notice is reserved (one of the
+32 entries), with both pauses; even a budget that fits only the notice remains
+explicit. `1/32+` is a bounded count, **not** a claim that all causes were shown.
+Use the unchanged full producer snapshot/journal for technical detail. The
+65,536-character snapshot input bound and original freshness/type/coherence
+validation remain shared with the legacy pager, not duplicated.
+
+Known producer phrases are translated without inventing a diagnosis. A fresh
+unknown snapshot with `configured disk unavailable: bay-a` shows `SEM DADOS`
+and scrolls `Disco configurado indisponivel: bay-a`; this does not say the disk is
+defective or healthy. Known critical reasons still take precedence over missing
+sources. Other invalid/stale/incoherent data shows `SEM DADOS` with
+`Dados indisponiveis`; a coherent fresh healthy snapshot alone shows `Tudo OK`.
+Unrecognized source text is ASCII-normalized faithfully, not reinterpreted.
+
+`status_label.<EXACT_SYSTEMD_UNIT_ID>=human label` is an optional private alias.
+The loaded `status_labels` dictionary uses the literal full unit ID as its key,
+including suffix/instance/escaping. No case folding, prefix matching, suffix
+completion or whitespace repair is applied; write the key without spaces before
+`=`. Invalid identifiers, blank/over-512-character labels and control characters
+are ignored. Missing aliases fall back to `Servico em falha: <id>`. An alias
+changes only presentation, not the snapshot/identifier or status. Neither a unit
+name nor a collector timestamp establishes that a failure is old, recovered or
+resolved; labels must not assert those conclusions without independent evidence.
+Public examples deliberately contain no deployment unit IDs or labels.
+
+External writers interrupt and permanently cancel the popup; denied/reacquiring
+ownership drains/discards requests instead of replaying them. Disabling the LCD
+or the originating shortcut, or rebinding that shortcut, cancels its popup. A Copy
+cancel from a fresh press dismisses any informational popup before maintenance;
+unrelated configuration of the other shortcut does not dismiss a popup. Buttons
+are drained without hidden tick/actions; both boundaries require release before
+any fresh navigation. All Copy gestures,
+maintenance/energy dispatch, status production, IPC and hardware paths are unchanged.
+Offline clock/AST/socket/loop tests exercise these contracts with inert effects;
+readability and automatic return on the actual panel require physical acceptance.
 
 ## Status and lighting
 
