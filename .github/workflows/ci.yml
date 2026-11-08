@@ -13,7 +13,6 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONPATH: src
-      TMPDIR: ${{ runner.temp }}/proxnap-tests
     strategy:
       matrix:
         python-version: ["3.11", "3.13"]
@@ -22,10 +21,13 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Prepare private runtime scratch
+        run: |
+          scratch="$RUNNER_TEMP/proxnap-tests"
+          mkdir -p -m 0700 "$scratch"
+          printf 'TMPDIR=%s\n' "$scratch" >> "$GITHUB_ENV"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e '.[test]'
-      - name: Prepare private runtime scratch
-        run: mkdir -p -m 0700 "$TMPDIR"
       - name: Lint Python
         run: ruff check src tests scripts
       - name: Parse Python AST
