@@ -1,9 +1,17 @@
 # Changelog
 
-## Unreleased — status source availability
+## Unreleased — status availability and configurable metrics
 
 - A failed systemd query is unavailable, not evidence that no units failed. Status, LCD and metrics no longer publish healthy data after an empty/nonzero query result; recovery and unrelated known-critical conditions remain explicit.
-
+- Add `PROXNAP_METRICS_MEASUREMENT_PREFIX` (default `proxnap`) to preserve an
+  operator-selected existing measurement namespace in HTTP and dry-run output.
+  Only the initial measurement prefix changes; suffixes, tags, fields, escaping
+  and timestamps remain intact.
+- Add validated `PROXNAP_METRICS_SERVICES` CSV configuration, retaining the exact
+  generic default inventory and publishing inactive/disabled units as data.
+  InfluxDB credentials/destination, sampling cadence and slot mapping are unchanged.
+- Add offline compatibility, injection-rejection and output-parity regressions.
+  No installation, service action or physical validation is implied.
 
 ## 2026-11-07
 

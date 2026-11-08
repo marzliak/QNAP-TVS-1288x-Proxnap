@@ -30,7 +30,8 @@ METRIC_DEFS = {
     "field_value", "esc_tag", "esc_measurement", "esc_string", "line", "emit",
     "collect_hwmon", "hwmons_by_name", "read_int", "collect_status",
     "collect_services", "collect_smart", "run_smart_lines", "write_influx",
-    "collect_all",
+    "collect_all", "validate_measurement_prefix", "transform_measurement_prefix",
+    "validate_services",
 }
 STATUS_DEFS = {
     "max_temp_c", "smart_bad", "failed_units", "health_reasons", "update_reasons",
@@ -85,7 +86,8 @@ class Fixture:
         self.settings = SimpleNamespace(host="fixture", timeout=1, check_seconds=30,
             critical_temp_c=85, reallocated_red_threshold=100, update_check_seconds=21600,
             dry_run=True, influx_url="https://inert.invalid", influx_token="fixture-only",
-            influx_org="fixture", influx_bucket="fixture", precision="s")
+            influx_org="fixture", influx_bucket="fixture", precision="s",
+            measurement_prefix="proxnap", services=("fixture-one", "fixture-two"))
         fake_subprocess = SimpleNamespace(DEVNULL=-3, call=Mock(return_value=0),
             check_output=Mock(side_effect=refuse), CalledProcessError=subprocess.CalledProcessError,
             SubprocessError=subprocess.SubprocessError)

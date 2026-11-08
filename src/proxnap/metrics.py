@@ -29,6 +29,11 @@ HWMON_ROOT = Path("/sys/class/hwmon")
 NET_ROOT = Path("/sys/class/net")
 CPU_ROOT = Path("/sys/devices/system/cpu")
 STATUS_JSON = Path("/run/proxnap-status.json")
+DEFAULT_SERVICES = (
+    "proxnap-lcd", "proxnap-fan-control", "proxnap-status-led",
+    "proxnap-panel-breath", "proxnap-copy-button", "proxnap-power-button",
+    "qnap8528-load-module", "pveproxy", "pvedaemon", "pvestatd", "zfs-zed", "smartd",
+)
 
 
 @dataclass
@@ -46,6 +51,65 @@ class Settings:
     timeout: int = 8
     once: bool = False
     dry_run: bool = False
+    measurement_prefix: str = "proxnap"
+    services: tuple[str, ...] = DEFAULT_SERVICES
+
+    def __post_init__(self) -> None:
+        validate_measurement_prefix(self.measurement_prefix)
+        validate_services(self.services)
+
+
+def validate_measurement_prefix(prefix: str) -> str:
+    """Allow a literal ASCII namespace, never line-protocol syntax."""
+    if not isinstance(prefix, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", prefix):
+        raise ValueError("PROXNAP_METRICS_MEASUREMENT_PREFIX must match [A-Za-z][A-Za-z0-9_]*")
+    return prefix
+
+
+def transform_measurement_prefix(encoded: str, prefix: str) -> str:
+    """Change only an initial proxnap_ measurement prefix in one encoded point.
+
+    Keep the measurement suffix, escaped tags, fields and timestamp byte-exact.
+    Other measurement namespaces pass through; embedded record separators fail.
+    """
+    validate_measurement_prefix(prefix)
+    if not isinstance(encoded, str) or "\n" in encoded or "\r" in encoded:
+        raise ValueError("metrics output must contain exactly one line per point")
+    if encoded.startswith("proxnap_"):
+        return prefix + encoded[len("proxnap"):]
+    return encoded
+
+
+def validate_services(services: tuple[str, ...]) -> tuple[str, ...]:
+    """Validate ordered literal unit names, not options, paths or patterns."""
+    if not isinstance(services, tuple) or not services:
+        raise ValueError("PROXNAP_METRICS_SERVICES must contain at least one unit")
+    unit_types = {"service", "socket", "target", "device", "mount", "automount",
+                  "swap", "timer", "path", "slice", "scope"}
+    for unit in services:
+        if (not isinstance(unit, str) or
+                not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:@-]*", unit) or
+                unit.count("@") > 1 or unit.endswith("@")):
+            raise ValueError("PROXNAP_METRICS_SERVICES contains an invalid literal unit name")
+        if "." in unit:
+            stem, suffix = unit.rsplit(".", 1)
+            if suffix not in unit_types or not stem:
+                raise ValueError("PROXNAP_METRICS_SERVICES contains an invalid unit suffix")
+            full_name = unit
+        else:
+            full_name = unit + ".service"
+        if len(full_name) > 255:
+            raise ValueError("PROXNAP_METRICS_SERVICES contains an overlong unit name")
+    if len(set(services)) != len(services):
+        raise ValueError("PROXNAP_METRICS_SERVICES contains duplicate units")
+    return services
+
+
+def parse_services(raw: str) -> tuple[str, ...]:
+    """Parse CSV with optional ASCII spaces around each nonempty unit."""
+    if not isinstance(raw, str) or any(char in raw for char in "\r\n\t"):
+        raise ValueError("PROXNAP_METRICS_SERVICES must be a single-line CSV of units")
+    return validate_services(tuple(unit.strip(" ") for unit in raw.split(",")))
 
 
 def env_int(name: str, default: int) -> int:
@@ -68,6 +132,8 @@ def load_settings() -> Settings:
         interval_qnap=env_int("PROXNAP_METRICS_INTERVAL_QNAP", 120),
         interval_slow=env_int("PROXNAP_METRICS_INTERVAL_SLOW", 300),
         timeout=env_int("PROXNAP_METRICS_TIMEOUT", 8),
+        measurement_prefix=os.environ.get("PROXNAP_METRICS_MEASUREMENT_PREFIX", "proxnap"),
+        services=parse_services(os.environ.get("PROXNAP_METRICS_SERVICES", ",".join(DEFAULT_SERVICES))),
     )
 
 
@@ -457,8 +523,7 @@ def collect_diskio(lines: list[str], settings: Settings, ts: int, prev: dict[str
 
 
 def collect_services(lines: list[str], settings: Settings, ts: int) -> None:
-    services = ["proxnap-lcd", "proxnap-fan-control", "proxnap-status-led", "proxnap-panel-breath", "proxnap-copy-button", "proxnap-power-button", "qnap8528-load-module", "pveproxy", "pvedaemon", "pvestatd", "zfs-zed", "smartd"]
-    for svc in services:
+    for svc in validate_services(settings.services):
         active = subprocess.call(["systemctl", "is-active", "--quiet", svc], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         enabled = subprocess.call(["systemctl", "is-enabled", "--quiet", svc], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         emit(lines, "proxnap_service", {"host": settings.host, "service": svc}, {"active": 1 if active == 0 else 0, "enabled": 1 if enabled == 0 else 0}, ts)
@@ -580,6 +645,7 @@ def collect_smart(lines: list[str], settings: Settings, ts: int, identities: dic
 
 
 def write_influx(settings: Settings, lines: list[str]) -> None:
+    lines = [transform_measurement_prefix(row, settings.measurement_prefix) for row in lines]
     if settings.dry_run:
         print("\n".join(lines))
         return

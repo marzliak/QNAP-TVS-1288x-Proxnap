@@ -27,8 +27,9 @@ source tree. Set `TMPDIR` to your runtime-provided scratch directory first.
 ```bash
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONPATH="$PWD/src"
+export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 python3 -B -m pytest -p no:cacheprovider
-ruff check src tests scripts
+ruff check --no-cache src tests scripts
 bash -n scripts/install.sh
 python3 -B -c 'import ast,pathlib; [ast.parse(p.read_text()) for p in pathlib.Path("src").rglob("*.py")]'
 ```
@@ -46,10 +47,40 @@ The fan implementation preserves the reference source bytes. Installed wrappers,
 packaging, action defaults and chassis guard are public integration layers, not
 proof that the reference host consumes them. The public status/LCD/Copy/Power code
 retains the recent offline-tested behavior while replacing host-specific defaults
-and routing power actions through public opt-ins. Metrics labels use `proxnap_` and
-operator-supplied slot mapping, not a private reference inventory.
+and routing power actions through public opt-ins. Metrics labels default to `proxnap_` and
+operator-supplied slot mapping, not a private reference inventory. An operator can
+retain an existing dashboard namespace and ordered service inventory through the
+settings described in [METRICS.md](METRICS.md), without changing collectors,
+InfluxDB destinations, timestamps or sampling intervals.
 
 Legacy first-release fan keys such as `stall_cycles` are intentionally not silently
 accepted by the stricter PWM parser. Review existing configuration against the
 shipped templates and validate it before any target maintenance. There is no
 automatic configuration migration or physical deployment in source consolidation.
+
+## Metrics compatibility checks
+
+`tests/test_metrics_compatibility.py` AST-selects the actual settings, validators,
+encoder, service collector, collection dispatcher, CLI loop and writer. It does
+not import the daemon. Subprocess and HTTP effects are inert mocks that fail
+unless explicitly configured; configuration is an isolated environment mapping.
+
+The cases cover:
+
+- unchanged generic settings/template and byte-exact default output for every
+  measurement emitted by the collector;
+- leading measurement-prefix replacement only, repeated suffixes, escaped
+  measurement/tag/field content, timestamps and foreign namespaces;
+- invalid prefix types/syntax and record-separator injection, rejecting the whole
+  output batch before printing or constructing an HTTP write;
+- CSV order/spelling, explicit suffixes and instances, whitespace rules, duplicate,
+  empty, overlong, path, option, glob and command/line-injection rejection;
+- configured inactive/disabled units still emitted with their original names and
+  integer active/enabled fields, with unchanged systemctl argument structure;
+- equal dry-run/HTTP bodies, unmodified input lists, unchanged URL/query/headers/
+  timeout, empty output and missing credentials;
+- the actual one-shot dry-run CLI path through every slow-tier collector, plus
+  the existing service/status, SMART and EC/tier-gating regression assertions.
+
+These are offline behavioral contracts, not evidence of target deployment,
+InfluxDB acceptance, actual service state or physical sensor readings.
