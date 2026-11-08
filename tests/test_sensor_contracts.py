@@ -33,7 +33,7 @@ METRIC_DEFS = {
     "collect_all",
 }
 STATUS_DEFS = {
-    "max_temp_c", "smart_bad", "health_reasons", "update_reasons",
+    "max_temp_c", "smart_bad", "failed_units", "health_reasons", "update_reasons",
     "status_snapshot", "unknown_status", "write_status_state",
 }
 
@@ -72,6 +72,7 @@ class Fixture:
         self.flags = set()
         self.reads = []
         self.command_result: tuple[int, str] = (0, "Listing... Done")
+        self.systemd_result: tuple[int, str] = (0, "")
         self.smart_result: tuple[int, str] = (0, PASS)
         self.disk_rows = [PASS]
         self.sectors = 1024
@@ -113,7 +114,7 @@ class Fixture:
             "known_temp_paths": set(), "last_update_check": 0.0, "last_update_reasons": [],
             "UPDATE_RUNNING_FLAG": "/run/proxnap-update-running",
             "STATUS_STATE_FILE": str(self.status_file), "sh": self.command,
-            "failed_units": lambda: None, "zfs_bad": lambda: None,
+            "zfs_bad": lambda: None,
             "root_read_only": lambda: None, "configured_disks": lambda *args: list(self.disks),
             "write_file": Mock(side_effect=self.write_status),
         }, baseline)
@@ -152,6 +153,8 @@ class Fixture:
         return [str(p) for p in sorted(path.parent.glob(path.name))]
 
     def command_call(self, args, **kwargs):
+        if args == ["systemctl", "--failed", "--no-legend", "--plain"]:
+            return self.systemd_result
         if args == ["apt", "list", "--upgradable"]:
             return self.command_result
         if len(args) == 5 and args[:3] == ["/usr/sbin/smartctl", "-H", "-A"]:
@@ -391,7 +394,9 @@ class CacheTests(OfflineCase):
         self.assertEqual(self.f.snapshot()[0], "warning")
         self.f.flags.clear()
         self.assertEqual(self.f.snapshot()[0], "ok")
-        self.assertEqual(self.f.command.call_count, 1)
+        apt_calls = [call for call in self.f.command.call_args_list
+                     if call.args[0] == ["apt", "list", "--upgradable"]]
+        self.assertEqual(len(apt_calls), 1)
 
     def test_failed_update_check_does_not_cache_healthy(self):
         self.f.device("coretemp", {"temp1_input": "50000"})
@@ -413,6 +418,77 @@ class CacheTests(OfflineCase):
             "warnings": [], "timestamp": 1000, "unavailable": ["sensor absent"],
             "check_seconds": 45}])
         self.assertEqual(len(self.f.effects), 1)
+
+
+class FailedUnitSourceTests(OfflineCase):
+    def consumer_roundtrip(self):
+        state, reasons, warnings, unavailable = self.f.snapshot()
+        self.f.s["write_status_state"](state, reasons, warnings, unavailable, 30)
+        self.f.status_file.write_text(json.dumps(self.f.status_writes[-1]))
+        tree = ast.parse((HERE.parent / "src/proxnap/lcd.py").read_text())
+        nodes: list[ast.stmt] = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                 and node.name in {"short_status_reason", "critical_status_page"}]
+        self.assertEqual(len(nodes), 2)
+        def status_open(path, mode="r", encoding="utf-8"):
+            self.assertEqual((path, mode, encoding), (str(self.f.status_file), "r", "utf-8"))
+            return io.StringIO(self.f.status_file.read_text())
+        namespace = {"json": json, "re": re, "LCD_WIDTH": 16,
+                     "STATUS_STATE_FILE": str(self.f.status_file), "open": status_open,
+                     "time": SimpleNamespace(time=lambda: self.f.clock)}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), "<lcd-status-only>", "exec",
+                     flags=__future__.annotations.compiler_flag), namespace)
+        return state, reasons, unavailable, namespace["critical_status_page"](), self.f.status_lines()[0]
+
+    def test_failed_query_is_unavailable_not_no_failed_units(self):
+        for rc in (-9, -1, 1, 127):
+            for output in ("", "Failed to connect to bus", "partial.service loaded failed failed"):
+                with self.subTest(rc=rc, output=output):
+                    self.f.systemd_result = (rc, output)
+                    unavailable = []
+                    self.assertIsNone(self.f.s["failed_units"](unavailable))
+                    self.assertEqual(len(unavailable), 1)
+                    self.assertIn("systemd", unavailable[0])
+
+    def test_query_failure_producer_lcd_metric_and_recovery(self):
+        self.f.device("coretemp", {"temp1_input": "50000"})
+        effects = []
+        for result, expected in (((0, ""), "ok"), ((-9, ""), "unknown"), ((0, ""), "ok")):
+            self.f.systemd_result = result
+            self.f.clock += 1
+            state, reasons, unavailable, page, point = self.consumer_roundtrip()
+            self.assertEqual(state, expected)
+            if expected == "unknown":
+                self.assertTrue(unavailable)
+                self.assertNotEqual(page[1], "All running OK")
+                self.assertIn("status_available=0i", point)
+                self.assertIn("status_code=9i", point)
+                self.f.s["unknown_status"](status_writer=lambda x: effects.append(("status", x)),
+                                            copy_writer=lambda x: effects.append(("copy", x)))
+            else:
+                self.assertFalse(reasons or unavailable)
+                self.assertEqual(page, ("System Check", "All running OK"))
+                self.assertIn("status_available=1i", point)
+                self.assertIn("status_code=0i", point)
+        self.assertEqual(effects, [("status", 0), ("copy", 0)])
+
+    def test_known_critical_not_hidden_by_service_query_failure(self):
+        self.f.device("coretemp", {"temp1_input": "95000"})
+        self.f.systemd_result = (-9, "")
+        state, reasons, unavailable, page, point = self.consumer_roundtrip()
+        self.assertEqual(state, "critical")
+        self.assertTrue(reasons and unavailable)
+        self.assertEqual(page[0], "Critical")
+        self.assertIn("status_code=2i", point)
+        self.assertIn("status_available=0i", point)
+
+    def test_successful_query_preserves_actual_failed_units(self):
+        self.f.device("coretemp", {"temp1_input": "50000"})
+        self.f.systemd_result = (0, "fixture.service loaded failed failed Fixture\n")
+        state, reasons, _, page, point = self.consumer_roundtrip()
+        self.assertEqual(state, "critical")
+        self.assertTrue(any("fixture.service" in x for x in reasons))
+        self.assertEqual(page[0], "Critical")
+        self.assertIn("status_code=2i", point)
 
 
 class StatusMetricTests(OfflineCase):

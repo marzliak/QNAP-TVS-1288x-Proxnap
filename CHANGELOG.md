@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — status source availability
+
+- A failed systemd query is unavailable, not evidence that no units failed. Status, LCD and metrics no longer publish healthy data after an empty/nonzero query result; recovery and unrelated known-critical conditions remain explicit.
+
+
 ## 2026-11-07
 
 - Consolidate the portable PWM, LCD, Copy/Power, health, telemetry and LED

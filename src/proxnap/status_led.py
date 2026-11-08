@@ -319,8 +319,11 @@ def max_temp_c(unavailable: list[str]) -> int | None:
     return max(temps) if temps else None
 
 
-def failed_units() -> str | None:
+def failed_units(unavailable: list[str]) -> str | None:
     rc, out = sh(["systemctl", "--failed", "--no-legend", "--plain"], timeout=8)
+    if rc != 0:
+        unavailable.append(f"systemd failed-unit query unavailable (exit={rc})")
+        return None
     lines = [line for line in out.splitlines() if line.strip()]
     return "failed systemd units: " + ", ".join(line.split()[0] for line in lines) if lines else None
 
@@ -352,7 +355,10 @@ def health_reasons(settings: Settings, unavailable: list[str]) -> list[str]:
     reasons = []
     if not os.path.isdir("/sys/module/qnap8528"):
         reasons.append("qnap8528 module missing")
-    for check in (failed_units, zfs_bad, root_read_only):
+    unit_reason = failed_units(unavailable)
+    if unit_reason:
+        reasons.append(unit_reason)
+    for check in (zfs_bad, root_read_only):
         reason = check()
         if reason:
             reasons.append(reason)
