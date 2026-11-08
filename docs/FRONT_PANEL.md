@@ -28,6 +28,76 @@ writes. Copy/Power feedback owns the display through close and any configured
 final delay. Navigation/held confirmations cannot continue invisibly through an
 external message. The daemon refreshes visible context after ownership changes.
 
+## Information-only Power status popup (opt-in)
+
+The existing LCD daemon can independently read a short `KEY_POWER` press and
+explain the same `/run/proxnap-status.json` snapshot used by the status indicator.
+This is **not** the legacy power-action listener. Leave that listener disabled;
+no new service, socket, network connection or action API is needed. A Power press
+is never an LCD Enter/Next gesture, never acknowledges/clears an alert, and cannot
+change fan mode, refresh packages, install updates, reboot or shut down. Status
+red/green and USB Copy blue indications retain their existing owners/policies.
+
+The shipped `lcd.conf` keeps this feature off:
+
+```ini
+power_status_enabled=false
+power_status_inputs=
+power_status_page_seconds=3.0
+```
+
+To opt in, supply an explicit CSV of locally verified absolute evdev paths (stable
+`/dev/input/by-path/` aliases are supported) and set `power_status_enabled=true`.
+Do not put these paths in `button_input`, and do not use the qnap8528 Copy/chassis
+input as a Power source. No device discovery is performed. Up to eight distinct
+configured paths are retained; relative paths are ignored. The resolver opens the
+resolved event node read-only, nonblocking, close-on-exec and no-follow, then checks
+the actual FD is an input/event character device with matching sysfs device
+identity, `Power Button` name and `KEY_POWER` capability. Duplicate aliases never
+retain two FDs for the same device. There is no exclusive grab or writing ioctl.
+Unplug/EOF/errors close the FD and retry after two seconds. Reloading configuration
+preserves unchanged FDs and closes removed/disabled inputs.
+
+A fresh press wakes the backlight and displays `Critico` or `Aviso` with numbered
+16-column reason pages. Fixed labels are Portuguese ASCII; producer reason text
+is ASCII-normalized and wrapped, not silently cut to the first 16 characters.
+Critical reasons take precedence over unavailable sources. Warnings use the
+`warnings` list, not critical reasons. `Tudo OK` requires a coherent fresh `ok`
+snapshot with empty reason/warning/unavailable lists. Missing, malformed,
+incoherent, stale, future or nonfinite state yields `Sem dados / Desconhecido`.
+Freshness uses the existing critical LCD page's rule: integer positive timestamp,
+finite positive `check_seconds` (default 30), and age from zero through that period.
+
+Each page lasts `power_status_page_seconds`: finite 1–10 seconds, default/fallback
+3.0. A snapshot read is bounded to 65,536 characters and a popup to 32 pages
+(at most 320 seconds with the maximum page timing). Normal reasons are complete;
+excessive reason text ends with `Mais: limite LCD`. Another Power press during a
+popup is consumed without restarting/extending it. This is a point-in-time
+snapshot, not a live alarm-acknowledgement screen.
+
+Safe home/cover/detail navigation and the pinned home frame are retained; menu
+inactivity is paused. Pending administrative confirmations, update/fan submenus
+and temporary overrides are cancelled, returning to home rather than rearming
+an action. LCD buttons are drained during the popup, with no hidden UI tick or
+button processing. Press state is reset at both boundaries; a held button must
+be released before navigation is accepted again. After the last page the safe
+panel is redrawn; normal inactivity/backlight policy resumes.
+
+All serial output remains in the LCD loop under the existing shared transaction
+lock. External Copy/action messages have ownership priority: Power events are
+drained/discarded while ownership is denied and on reacquisition, an interrupted
+popup is cancelled, and no pending request is replayed. Event timestamps must use
+evdev's default realtime clock, be no older than one second, not future-dated and
+not predate the current open/suspension boundary. Press/release can be instantaneous
+(no Copy-style minimum hold); autorepeat, bounce and duplicate ACPI sources within
+350 ms do not create extra requests. No OS/logind/ACPI power policy is changed by
+this feature: the operator must separately ensure the platform's Power policy is
+appropriate before opting in.
+
+The offline suite AST-isolates the actual reader, popup and bounded daemon loop
+with mandatory fake serial/input/metadata/worker/effect providers and scratch-only
+flock. Those tests are not physical validation of a particular input alias or LCD.
+
 ## Status and lighting
 
 | Indication | Meaning |

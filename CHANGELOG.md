@@ -2,6 +2,13 @@
 
 ## Unreleased — status availability and configurable metrics
 
+- Add an opt-in, information-only short `KEY_POWER` popup to the existing LCD
+  loop, reading the status indicator JSON without clearing alerts or dispatching
+  actions. Explicit validated read-only evdev aliases, reconnect/backoff,
+  timestamp/deduplication guards, paginated reasons and shared LCD ownership keep
+  this separate from the disabled legacy Power listener. Offline AST/loop tests
+  cover hidden-action rejection, safe navigation restoration and config reload;
+  no service/deployment or physical validation is implied.
 - A failed systemd query is unavailable, not evidence that no units failed. Status, LCD and metrics no longer publish healthy data after an empty/nonzero query result; recovery and unrelated known-critical conditions remain explicit.
 - Add `PROXNAP_METRICS_MEASUREMENT_PREFIX` (default `proxnap`) to preserve an
   operator-selected existing measurement namespace in HTTP and dry-run output.

@@ -92,7 +92,10 @@ import re
 import select
 import signal
 import socket
+import stat
 import struct
+import textwrap
+import unicodedata
 import subprocess
 import termios
 import threading
@@ -150,6 +153,9 @@ class Settings:
     services: tuple[str, ...] = ("pveproxy", "pvedaemon", "pvestatd")
     button_input: str = "/dev/input/by-path/platform-qnap8528-event"
     lcd_message_lock: str = LCD_MESSAGE_LOCK
+    power_status_enabled: bool = False
+    power_status_inputs: tuple[str, ...] = ()
+    power_status_page_seconds: float = 3.0
 
 
 @dataclass
@@ -273,6 +279,14 @@ def load_settings(path: str) -> Settings:
         settings.services = parse_csv(raw["services"])
     settings.button_input = raw.get("button_input", settings.button_input)
     settings.lcd_message_lock = raw.get("lcd_message_lock", settings.lcd_message_lock)
+    settings.power_status_enabled = parse_bool(raw.get("power_status_enabled", "false"), False)
+    # Explicit absolute paths only; never discover input devices implicitly.
+    settings.power_status_inputs = tuple(dict.fromkeys(
+        path for path in parse_csv(raw.get("power_status_inputs", ""))
+        if os.path.isabs(path) and len(path) <= 4096
+    ))[:8]
+    seconds = parse_float(raw.get("power_status_page_seconds", "3.0"), 3.0)
+    settings.power_status_page_seconds = seconds if math.isfinite(seconds) and 1 <= seconds <= 10 else 3.0
     return settings
 
 
@@ -831,6 +845,216 @@ def alert_pages(settings: Settings) -> list[tuple[str, str]]:
     if cpu and cpu >= 85:
         alerts.append(("Alert CPU temp", f"{cpu:.0f}C"))
     return alerts
+
+
+def _power_input_identity(fd: int, resolved: str) -> int:
+    """Validate the opened FD, not just its configurable alias. Read-only metadata.
+
+    No grab or clock-setting ioctl: evdev's default timestamps are CLOCK_REALTIME.
+    Sysfs capability words are native unsigned-long words, most significant first.
+    """
+    info = os.fstat(fd)
+    actual = os.path.realpath(f"/proc/self/fd/{fd}")
+    if not stat.S_ISCHR(info.st_mode) or actual != resolved or not re.fullmatch(r"/dev/input/event[0-9]+", actual):
+        raise ValueError("not an input event character device")
+    base = f"/sys/class/input/{os.path.basename(actual)}"
+    dev = read_file(f"{base}/dev")
+    if dev != f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}":
+        raise ValueError("input device identity changed")
+    if "".join(read_file(f"{base}/device/name").split()) != "PowerButton":
+        raise ValueError("not a Power Button")
+    words = read_file(f"{base}/device/capabilities/key").split()
+    word_bits = struct.calcsize("L") * 8
+    if not words or len(words) > 64:
+        raise ValueError("invalid key capabilities")
+    bits = 0
+    for word in words:
+        value = int(word, 16)
+        if not 0 <= value < (1 << word_bits):
+            raise ValueError("invalid capability word")
+        bits = (bits << word_bits) | value
+    if not bits & (1 << 116):  # KEY_POWER, never an LCD navigation mask
+        raise ValueError("KEY_POWER absent")
+    return info.st_rdev
+
+
+class _PowerStatusInputs:
+    """Bounded nonblocking evdev reader, owned exclusively by the LCD loop."""
+
+    EVENT = struct.Struct("llHHi")
+
+    def __init__(self):
+        self.sources: dict[str, dict] = {}
+        self.last_press = -float("inf")
+        self.discard_before = 0.0
+
+    def _disconnect(self, source: dict, mono: float):
+        fd = source.get("fd")
+        source.update(fd=None, buffer=b"", held=False, retry=mono + 2.0)
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def close(self):
+        for source in self.sources.values():
+            self._disconnect(source, 0.0)
+        self.sources.clear()
+
+    def configure(self, paths: tuple[str, ...], mono: float):
+        wanted = tuple(dict.fromkeys(p for p in paths if os.path.isabs(p) and len(p) <= 4096))[:8]
+        for path in list(self.sources):
+            if path not in wanted:
+                self._disconnect(self.sources.pop(path), mono)
+        for path in wanted:
+            self.sources.setdefault(path, dict(fd=None, buffer=b"", held=False, retry=0.0))
+
+    def poll(self, mono: float, accept: bool) -> bool:
+        requested = False
+        for path, source in self.sources.items():
+            if source["fd"] is None and mono >= source["retry"]:
+                fd = None
+                try:
+                    resolved = os.path.realpath(path)
+                    if not re.fullmatch(r"/dev/input/event[0-9]+", resolved):
+                        raise ValueError("not an event path")
+                    opened = time.time()
+                    fd = os.open(resolved, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW)
+                    identity = _power_input_identity(fd, resolved)
+                    if any(s.get("identity") == identity and s["fd"] is not None for s in self.sources.values()):
+                        raise ValueError("duplicate device alias")
+                    source.update(fd=fd, identity=identity, opened=opened, buffer=b"", held=False, sync_lost=False)
+                    fd = None
+                except (OSError, ValueError):
+                    source["retry"] = mono + 2.0
+                finally:
+                    if fd is not None:
+                        os.close(fd)
+            if source["fd"] is None:
+                continue
+            # Bound CPU per poll even if an input is continuously noisy.
+            for _ in range(4):
+                try:
+                    chunk = os.read(source["fd"], self.EVENT.size * 32)
+                    if not chunk:
+                        self._disconnect(source, mono)
+                        break
+                except BlockingIOError:
+                    break
+                except OSError:
+                    self._disconnect(source, mono)
+                    break
+                wall = time.time()
+                data = source["buffer"] + chunk
+                end = len(data) - len(data) % self.EVENT.size
+                source["buffer"] = data[end:]
+                for offset in range(0, end, self.EVENT.size):
+                    sec, usec, kind, code, value = self.EVENT.unpack_from(data, offset)
+                    if kind == 0 and code == 3:  # SYN_DROPPED: require sync then release
+                        source["held"] = True
+                        source["sync_lost"] = True
+                    if source["sync_lost"]:
+                        if kind == 0 and code == 0:  # SYN_REPORT
+                            source["sync_lost"] = False
+                        continue
+                    if kind != 1 or code != 116:
+                        continue
+                    if value == 0:
+                        source["held"] = False
+                        continue
+                    held = source["held"]
+                    source["held"] = True
+                    stamp = sec + usec / 1_000_000.0
+                    if (value != 1 or held or not 0 <= usec < 1_000_000
+                            or not 0 <= wall - stamp <= 1.0
+                            or stamp < source["opened"] or stamp <= self.discard_before):
+                        continue
+                    # One physical actuation can arrive from both ACPI devices.
+                    # Keep the newest timestamp independent of FD iteration order.
+                    duplicate = abs(stamp - self.last_press) < 0.35
+                    if stamp > self.last_press:
+                        self.last_press = stamp
+                    if accept and not duplicate:
+                        requested = True
+            if not accept:
+                # A fragmented or over-budget queued frame must not complete later
+                # as a fresh request after an external writer releases ownership.
+                self.discard_before = max(self.discard_before, time.time())
+        return requested
+
+
+def _power_status_pages() -> list[tuple[str, str]]:
+    """Current indicator snapshot, bounded to 64K characters and 32 2x16 pages."""
+    unknown = [("Sem dados", "Desconhecido")]
+    try:
+        with open(STATUS_STATE_FILE, "r", encoding="utf-8") as stream:
+            raw = stream.read(65537)
+        if len(raw) > 65536:
+            return unknown
+        state = json.loads(raw)
+        if not isinstance(state, dict):
+            return unknown
+        stamp, period = state.get("timestamp"), state.get("check_seconds", 30)
+        if type(stamp) is not int or stamp <= 0:
+            return unknown
+        if type(period) not in {int, float} or not 0 < period < float("inf"):
+            return unknown
+        if not 0 <= time.time() - stamp <= period:
+            return unknown
+        reasons, warnings, unavailable = (state.get("reasons"), state.get("warnings"), state.get("unavailable", []))
+        if not all(isinstance(items, list) and all(isinstance(x, str) and x.strip() for x in items)
+                   for items in (reasons, warnings, unavailable)):
+            return unknown
+        status = state.get("status")
+        if status == "critical" and reasons:
+            title, messages = "Critico", reasons
+        elif unavailable:
+            return unknown
+        elif status == "warning" and warnings and not reasons:
+            title, messages = "Aviso", warnings
+        elif status == "ok" and not reasons and not warnings:
+            return [("Estado atual", "Tudo OK")]
+        else:
+            return unknown
+        lines = []
+        for message in messages:
+            normalized = unicodedata.normalize("NFKD", message)
+            clean = "".join(c for c in normalized if not unicodedata.combining(c))
+            clean = clean.encode("ascii", "replace").decode("ascii")
+            clean = " ".join("".join(c if 32 <= ord(c) <= 126 else " " for c in clean).split())
+            for line in textwrap.wrap(clean, width=LCD_WIDTH):
+                lines.append(line)
+                if len(lines) > 32:
+                    return [(f"{title} {i + 1}/32", text) for i, text in enumerate(lines[:31])] + [(title, "Mais: limite LCD")]
+        return [(f"{title} {i + 1}/{len(lines)}", text) for i, text in enumerate(lines)] or unknown
+    except (OSError, ValueError, TypeError, RecursionError, OverflowError):
+        return unknown
+
+
+class _PowerStatusPopup:
+    """Information only. Freeze safe navigation; never replay administrative UI."""
+
+    def __init__(self, ui, now: float, seconds: float):
+        self.pages = _power_status_pages()
+        self.started = now
+        self.seconds = seconds if math.isfinite(seconds) and 1 <= seconds <= 10 else 3.0
+        self.manual_remaining = max(0.0, ui.manual_until - now)
+        if ui.mode not in {"home", "cover", "section"}:
+            ui.go_home(now)
+            self.manual_remaining = 0.0
+        ui.confirm_action = None
+        ui.override = None
+        ui.override_until = 0.0
+        ui.reset_press()
+
+    def lines(self, now: float) -> tuple[str, str] | None:
+        index = int(max(0.0, now - self.started) / self.seconds)
+        return self.pages[index] if index < len(self.pages) else None
+
+    def finish(self, ui, now: float):
+        ui.reset_press()
+        ui.manual_until = now + self.manual_remaining if self.manual_remaining else 0.0
 
 
 class InputButtons:
@@ -1602,6 +1826,8 @@ def run(args) -> int:
     disabled_by_config = not settings.enabled
     needs_init = True
     output_suspended = True
+    power_inputs = None
+    power_popup = None
 
     try:
         lcd.open()
@@ -1622,6 +1848,24 @@ def run(args) -> int:
                 buttons = lcd.read_buttons()
                 buttons.extend(input_buttons.read_buttons())
             with lcd_transaction(settings.lcd_message_lock) as owned:
+                # Power has its own read-only source, never an Enter/Next mask.
+                # Keep draining while another writer owns the panel; discard there.
+                power_request = False
+                if settings.enabled and settings.power_status_enabled:
+                    if power_inputs is None:
+                        power_inputs = _PowerStatusInputs()
+                    power_inputs.configure(settings.power_status_inputs, mono)
+                    power_request = power_inputs.poll(mono, owned and not output_suspended and power_popup is None)
+                elif power_inputs is not None:
+                    power_inputs.close()
+                    power_inputs = None
+                if power_popup is not None and (not owned or not settings.enabled or not settings.power_status_enabled):
+                    power_popup.finish(ui, mono)
+                    power_popup = None
+                    last_activity = mono
+                    last_lines = None
+                    last_render = 0.0
+                    ignore_until_release = True
                 if not owned:
                     output_suspended = True
                     last_render = 0.0
@@ -1662,80 +1906,107 @@ def run(args) -> int:
                             last_render = 0.0
                             output_suspended = False
 
-                        pages = page_cache.get()
-                        pages_count = len(ui.current_group_pages(pages))
-                        if lcd.backlight_on and last_lines is not None and (buttons or ui.press_mask):
-                            # A short external message may fit between polls.
-                            # Reassert the visible context before any UI action.
-                            lcd.write_lines(*last_lines)
-                        for btn in buttons:
-                            print(f"button {button_name(btn)} mask=0x{btn:02x}", flush=True)
-                            if not lcd.backlight_on:
-                                if btn:
-                                    lcd.backlight(True)
-                                    ui.go_home(mono)
-                                    last_activity = mono
-                                    last_render = 0.0
-                                    last_lines = None
-                                    ignore_until_release = True
-                                    ui.reset_press()
-                                continue
-
-                            last_activity = mono
-                            if ignore_until_release:
-                                if btn == 0:
-                                    ignore_until_release = False
-                                continue
-
-                            ui.process_mask(btn, mono, pages_count, pages)
-                            last_render = 0.0
+                        if power_request and power_popup is None:
+                            ignore_until_release = ignore_until_release or bool(ui.press_mask)
+                            power_popup = _PowerStatusPopup(ui, mono, settings.power_status_page_seconds)
+                            lcd.backlight(True)
                             last_lines = None
-
-                        if ui.tick(mono, pages_count, pages):
-                            last_activity = mono
                             last_render = 0.0
-                            last_lines = None
-
-                        if ui.mode != "home" and ui.manual_until and mono >= ui.manual_until:
-                            ui.go_home(mono)
-                            last_activity = mono
-                            ui.home_visible_frame = home_frame_index(mono, settings)
-                            last_render = 0.0
-                            last_lines = None
-
-                        if lcd.backlight_on and ui.mode == "home" and mono - last_activity > settings.timeout_seconds:
-                            lcd.clear()
-                            lcd.backlight(False)
-                            ignore_until_release = False
+                        popup_lines = power_popup.lines(mono) if power_popup is not None else None
+                        if power_popup is not None and popup_lines is None:
+                            power_popup.finish(ui, mono)
+                            power_popup = None
                             ui.reset_press()
+                            ignore_until_release = bool(buttons[-1]) if buttons else ignore_until_release
+                            buttons = []
+                            last_activity = mono
                             last_lines = None
-
-                        home_render = ui.mode == "home" and mono - last_render >= settings.home_tick_seconds
-                        should_rotate = ui.should_rotate(mono) and mono - last_render >= settings.page_seconds
-                        should_render = last_render == 0.0 or home_render or should_rotate
-                        if lcd.backlight_on and should_render:
-                            pages = page_cache.get()
-                            if not pages:
-                                pages = [LcdPage("Status", "Empty", "PROXNAP LCD", "no pages")]
-                            pages_count = len(ui.current_group_pages(pages))
-                            if should_rotate and last_render != 0.0:
-                                ui.advance_page(pages_count)
-                            if ui.mode == "home":
-                                line1, line2, frame = home_lines(
-                                    page_cache.get_snapshot(),
-                                    mono,
-                                    settings,
-                                    ui.home_frame_lock,
-                                    ui.home_visible_frame,
-                                )
-                                ui.home_visible_frame = frame
-                            else:
-                                line1, line2 = ui.lines(pages, mono)
-                            # flock is not a change counter: another writer may
-                            # run entirely between polls. Refresh even equal lines.
-                            lcd.write_lines(line1, line2)
-                            last_lines = (line1, line2)
+                            last_render = 0.0
+                        if power_popup is not None and popup_lines is not None:
+                            # Drain navigation without hidden tick/process_mask.
+                            # A held button must be released before any new gesture.
+                            if buttons:
+                                ignore_until_release = bool(buttons[-1])
+                            ui.reset_press()
+                            last_activity = mono
+                            lcd.write_lines(*popup_lines)
+                            last_lines = popup_lines
                             last_render = mono
+                        else:
+                            pages = page_cache.get()
+                            pages_count = len(ui.current_group_pages(pages))
+                            if lcd.backlight_on and last_lines is not None and (buttons or ui.press_mask):
+                                # A short external message may fit between polls.
+                                # Reassert the visible context before any UI action.
+                                lcd.write_lines(*last_lines)
+                            for btn in buttons:
+                                print(f"button {button_name(btn)} mask=0x{btn:02x}", flush=True)
+                                if not lcd.backlight_on:
+                                    if btn:
+                                        lcd.backlight(True)
+                                        ui.go_home(mono)
+                                        last_activity = mono
+                                        last_render = 0.0
+                                        last_lines = None
+                                        ignore_until_release = True
+                                        ui.reset_press()
+                                    continue
+
+                                last_activity = mono
+                                if ignore_until_release:
+                                    if btn == 0:
+                                        ignore_until_release = False
+                                    continue
+
+                                ui.process_mask(btn, mono, pages_count, pages)
+                                last_render = 0.0
+                                last_lines = None
+
+                            if ui.tick(mono, pages_count, pages):
+                                last_activity = mono
+                                last_render = 0.0
+                                last_lines = None
+
+                            if ui.mode != "home" and ui.manual_until and mono >= ui.manual_until:
+                                ui.go_home(mono)
+                                last_activity = mono
+                                ui.home_visible_frame = home_frame_index(mono, settings)
+                                last_render = 0.0
+                                last_lines = None
+
+                            if lcd.backlight_on and ui.mode == "home" and mono - last_activity > settings.timeout_seconds:
+                                lcd.clear()
+                                lcd.backlight(False)
+                                ignore_until_release = False
+                                ui.reset_press()
+                                last_lines = None
+
+                            home_render = ui.mode == "home" and mono - last_render >= settings.home_tick_seconds
+                            should_rotate = ui.should_rotate(mono) and mono - last_render >= settings.page_seconds
+                            should_render = last_render == 0.0 or home_render or should_rotate
+                            if lcd.backlight_on and should_render:
+                                pages = page_cache.get()
+                                if not pages:
+                                    pages = [LcdPage("Status", "Empty", "PROXNAP LCD", "no pages")]
+                                pages_count = len(ui.current_group_pages(pages))
+                                if should_rotate and last_render != 0.0:
+                                    ui.advance_page(pages_count)
+                                if ui.mode == "home":
+                                    line1, line2, frame = home_lines(
+                                        page_cache.get_snapshot(),
+                                        mono,
+                                        settings,
+                                        ui.home_frame_lock,
+                                        ui.home_visible_frame,
+                                    )
+                                    ui.home_visible_frame = frame
+                                else:
+                                    line1, line2 = ui.lines(pages, mono)
+                                # flock is not a change counter: another writer may
+                                # run entirely between polls. Refresh even equal lines.
+                                lcd.write_lines(line1, line2)
+                                last_lines = (line1, line2)
+                                last_render = mono
 
             time.sleep(0.2 if settings.enabled else 1.0)
     finally:
@@ -1747,14 +2018,18 @@ def run(args) -> int:
                         lcd.backlight(False)
         finally:
             try:
-                input_buttons.close()
+                if power_inputs is not None:
+                    power_inputs.close()
             finally:
                 try:
-                    lcd.close()
+                    input_buttons.close()
                 finally:
-                    if worker_started:
-                        stop()
-                        worker.join(timeout=1.0)
+                    try:
+                        lcd.close()
+                    finally:
+                        if worker_started:
+                            stop()
+                            worker.join(timeout=1.0)
     return 0
 
 

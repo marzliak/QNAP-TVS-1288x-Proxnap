@@ -22,7 +22,7 @@ USB Copy button, and the power button.
 | Status LED | explicit healthy/warning/critical/unknown local health; stale data is not healthy |
 | Front-panel lighting | fixed brightness by default, with an optional breathing effect |
 | HDD, SSD, and M.2 LEDs | green on activity and flashing red on critical SMART health, after explicit bay mapping |
-| USB Copy and power buttons | guarded multi-click actions with a second physical confirmation sequence |
+| USB Copy and power buttons | guarded multi-click actions with a second physical confirmation sequence; optional short Power press explains status on the LCD without actions |
 
 The controls run locally as systemd services and do not depend on a dashboard or
 cloud connection. An optional InfluxDB metrics writer is supplied but disabled by
