@@ -22,6 +22,8 @@ import termios
 import time
 from dataclasses import dataclass
 
+from proxnap.status_ipc import send_status_notice
+
 
 DEFAULT_CONFIG = "/etc/proxnap/copy-button.conf"
 EVENT = struct.Struct("llHHi")
@@ -34,6 +36,8 @@ running = True
 @dataclass
 class Settings:
     enabled: bool = False
+    single_click_status_enabled: bool = False
+    status_socket: str = "@proxnap-lcd-status"
     button_input: str = "/dev/input/by-path/platform-qnap8528-event"
     button_code: int = BTN_COPY
     check_hold_seconds: float = 2.0
@@ -118,6 +122,8 @@ def load_settings(path: str) -> Settings:
     raw = read_config(path)
     settings = Settings()
     settings.enabled = parse_bool(raw.get("enabled", "false"), False)
+    settings.single_click_status_enabled = parse_bool(raw.get("single_click_status_enabled", "false"), False)
+    settings.status_socket = raw.get("status_socket", settings.status_socket)
     settings.button_input = raw.get("button_input", settings.button_input)
     settings.button_code = parse_int(raw.get("button_code", hex(settings.button_code)), settings.button_code)
     legacy_hold = raw.get("hold_seconds")
@@ -578,6 +584,7 @@ def loop(settings: Settings) -> int:
     accept_after = time.monotonic()
     discard_until_release = False
     syncing = False
+    single_status_eligible = True
     upgrade_hold = (
         f", {settings.upgrade_hold_seconds:.0f}s to update"
         if settings.upgrade_hold_seconds > 0
@@ -594,7 +601,7 @@ def loop(settings: Settings) -> int:
 
     def reset_state():
         nonlocal press_started, pending_action, pending_until, last_release, last_event
-        nonlocal accept_after, discard_until_release, syncing
+        nonlocal accept_after, discard_until_release, syncing, single_status_eligible
         press_started = None
         click_times.clear()
         confirm_times.clear()
@@ -605,6 +612,7 @@ def loop(settings: Settings) -> int:
         accept_after = time.monotonic()
         discard_until_release = False
         syncing = False
+        single_status_eligible = True
 
     def arm_action(action: str):
         nonlocal confirm_times, pending_action, pending_until, accept_after
@@ -624,7 +632,7 @@ def loop(settings: Settings) -> int:
         pending_until = accept_after + settings.confirm_window_seconds
 
     def settle_sequence(now: float):
-        nonlocal click_times
+        nonlocal click_times, single_status_eligible
         if not click_times:
             return
         click_times = [t for t in click_times if now - t <= settings.click_sequence_window_seconds]
@@ -634,7 +642,12 @@ def loop(settings: Settings) -> int:
             return
         count = len(click_times)
         click_times = []
-        if count >= settings.poweroff_click_min:
+        status_eligible = single_status_eligible
+        single_status_eligible = True
+        if count == 1 and status_eligible and settings.single_click_status_enabled and not pending_action:
+            sent = send_status_notice(settings.status_socket, "status")
+            log(settings, "copy status request " + ("sent" if sent else "unavailable"))
+        elif count >= settings.poweroff_click_min:
             arm_action("poweroff")
         elif count >= settings.reboot_click_min:
             arm_action("reboot")
@@ -655,7 +668,7 @@ def loop(settings: Settings) -> int:
         return False
 
     def confirm_or_count_click(now: float):
-        nonlocal click_times, confirm_times, pending_action, accept_after
+        nonlocal click_times, confirm_times, pending_action, accept_after, single_status_eligible
         if pending_action:
             confirm_times.append(now)
             remaining = settings.confirm_click_count - len(confirm_times)
@@ -677,6 +690,8 @@ def loop(settings: Settings) -> int:
             return
 
         click_times.append(now)
+        if len(click_times) > 1:
+            single_status_eligible = False
         click_times = [
             t for t in click_times if now - t <= settings.click_sequence_window_seconds
         ]
@@ -732,6 +747,7 @@ def loop(settings: Settings) -> int:
                         continue
                     last_event = captured
                     if value == 2:  # Autorepeat is not a click or a new press.
+                        single_status_eligible = False
                         continue
                     if discard_until_release:
                         if value == 0:
@@ -745,6 +761,8 @@ def loop(settings: Settings) -> int:
                             discard_until_release = True
                             continue
                         press_started = captured
+                        if settings.single_click_status_enabled:
+                            send_status_notice(settings.status_socket, "cancel")
                         log(settings, "copy button down")
                     elif value == 0 and press_started is not None:
                         held = captured - press_started

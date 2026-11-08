@@ -2,6 +2,17 @@
 
 ## Unreleased — status availability and configurable metrics
 
+- Add opt-in isolated short Copy click status through a local Linux abstract
+  datagram socket between the existing input and LCD owners. Exactly one released
+  click waits for the existing settle; every new valid press cancels the popup.
+  UID0 credentials, monotonic freshness/replay guards and bounded draining reject
+  untrusted or queued requests; external LCD writers always take priority.
+  Reuse the existing paginated status snapshot and safe automatic return. Existing
+  maintenance gestures, thresholds and Power input behavior are unchanged.
+- Add LCD `copy_update_config` for the three update callbacks only, allowing an
+  existing nondefault Copy config path without widening LCD energy authorization.
+  All new status defaults remain off. Offline source/socket/loop tests do not
+  establish deployment, physical Copy input mapping, or visible LCD acceptance.
 - Add an opt-in, information-only short `KEY_POWER` popup to the existing LCD
   loop, reading the status indicator JSON without clearing alerts or dispatching
   actions. Explicit validated read-only evdev aliases, reconnect/backoff,

@@ -98,6 +98,67 @@ The offline suite AST-isolates the actual reader, popup and bounded daemon loop
 with mandatory fake serial/input/metadata/worker/effect providers and scratch-only
 flock. Those tests are not physical validation of a particular input alias or LCD.
 
+## Isolated Copy click status popup (opt-in)
+
+The existing Copy listener can request the same information-only popup after
+**exactly one valid released short click**, once the existing
+`click_sequence_settle_seconds` quiet period has elapsed (default two seconds).
+There is no popup for two/three clicks, maintenance/confirmation sequences, holds,
+autorepeat, bounce, malformed/stale events or disconnected/partial gestures. A
+pending Copy maintenance confirmation never becomes a status request. Every new
+valid Copy press sends cancel immediately, so a later hold or multi-click sequence
+is not hidden by an earlier popup. No maintenance threshold or action is changed.
+
+Both ends ship disabled. To opt in, enable the existing Copy listener with its
+locally verified input binding and configure matching names in both programs:
+
+```ini
+# copy-button.conf (the Copy listener's actual --config file)
+single_click_status_enabled=true
+status_socket=@proxnap-lcd-status
+
+# lcd.conf
+copy_status_enabled=true
+copy_status_socket=@proxnap-lcd-status
+```
+
+The LCD does not read or classify Copy events. The only new transport is a Linux
+abstract `AF_UNIX/SOCK_DGRAM` endpoint in the same network namespace; `@` denotes
+the leading NUL, **not a filesystem socket path**. Names are bounded ASCII, up to
+106 characters after `@`. There is no new service, input reader, persistent
+mailbox, command payload or public/network listener. The fixed 13-byte protocol
+is `PLS1`, one byte `S` (status) or `C` (cancel), then an unsigned big-endian
+64-bit monotonic nanosecond timestamp. `SO_PASSCRED`/`recvmsg` require exactly one
+kernel credential record with UID0. Unknown, truncated, unauthenticated, future,
+pre-bind, over-two-second-old and replayed timestamps are rejected. At most 16
+datagrams are drained per iteration; exhausting that budget discards any status
+result rather than displaying an uncertain request and invalidates the remaining
+captured backlog. Only an authenticated cancel can cancel an existing popup.
+
+Sending is nonblocking/best effort, never a command or external LCD-write fallback.
+A missing/busy receiver cannot abort maintenance; one bounded result is logged per
+settled single-click request (`sent` means queued locally, not physically visible).
+Bind failures leave normal LCD rendering working and retry no faster than every
+five seconds; operators must verify socket readiness before enabling the shortcut.
+Disable/re-enable, receive errors and endpoint changes close/reset the receiver;
+the prior name is released and old requests cannot trigger after rebinding.
+
+The existing status snapshot parser and popup are shared with Power status, not
+copied into the Copy listener. Critical reasons survive partial unavailability;
+missing/invalid status remains explicitly unknown. Each page uses the existing
+`power_status_page_seconds` setting (default three seconds). A request wakes a dark
+LCD, preserves safe navigation and a fixed home frame, then returns automatically.
+Cancel also restores safely, without replaying held navigation or administrative
+confirmations. Requests arriving without LCD ownership or during reacquisition
+are discarded, never deferred; an external writer interrupts the popup permanently.
+Repeated status requests during a popup do not extend it. Existing Power opt-in
+and navigation behavior remain independent.
+
+Offline tests exercise unique abstract sockets and the actual AST-isolated Copy
+and LCD loops with inert hardware/final-action providers. They do **not** prove the
+physical Copy binding, a visible message, automatic return on real hardware, or
+deployment of this package. Physical acceptance remains a separate operator gate.
+
 ## Status and lighting
 
 | Indication | Meaning |
@@ -148,6 +209,16 @@ pending state and require a new complete sequence.
 The Actions menu dispatches update and power requests through the same guarded
 Copy backend; it does not bypass the explicit power/package permissions. It uses
 visible LCD confirmation, not a requirement to click the Copy button itself.
+
+For existing installations, `lcd.conf` can set `copy_update_config` to the actual
+Copy listener configuration path. It defaults to `/etc/proxnap/copy-button.conf`
+and affects **only** Ref+Run, Refresh and Run update callbacks. Reboot/Shutdown
+callbacks retain their existing constant/default path; this setting must not
+grant them permissions from a different Copy config. The current backend has
+fail-closed package/power defaults, unlike some legacy installations. Before
+adoption, preserve deliberately authorized package settings in the actual config
+and check update-menu path compatibility. Do not fix or enable a previously
+nonworking energy command chain as a side effect of this informational shortcut.
 
 Existing first-release button configuration may use different click semantics;
 review the current templates rather than assuming old numeric thresholds still

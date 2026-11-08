@@ -142,6 +142,24 @@ sudo bash scripts/install.sh --enable-power-button --allow-poweroff
 The Copy listener accepts the same reboot and poweroff flags. Do not grant them
 without console access, a tested backup, and a maintenance window.
 
+## Legacy flat LCD/Copy distributions
+
+For a separately authorized, identity-checked incremental migration of existing
+flat scripts, `scripts/build_standalone.py lcd` or
+`scripts/build_standalone.py copy-update` emits a deterministic distribution on
+stdout. It embeds the canonical `status_ipc.py` utility, so the two legacy
+entrypoints need no new system Python path, installed package or unit change.
+The generated header records both source SHA-256 identities. Keep the generated
+files outside this repository; they are distributions, not another source owner.
+
+This builder does **not** install, validate a host identity, back up a live
+service, change configuration, or restart anything. It is not a replacement for
+the guarded normal installer. A live operator procedure must separately freeze
+and review the inputs, verify identity and external recovery, activate the LCD
+receiver before Copy, and verify installed distribution hashes. Do not copy the
+raw modules alone to a flat legacy installation: they import the shared utility.
+Mocks, compilation and matching hashes do not establish physical acceptance.
+
 ## Identity check
 
 Every installed entrypoint that writes hardware checks DMI before importing its

@@ -103,6 +103,8 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+from proxnap.status_ipc import StatusReceiver
+
 
 LCD_PORT = "/dev/ttyS1"
 LCD_WIDTH = 16
@@ -156,6 +158,9 @@ class Settings:
     power_status_enabled: bool = False
     power_status_inputs: tuple[str, ...] = ()
     power_status_page_seconds: float = 3.0
+    copy_status_enabled: bool = False
+    copy_status_socket: str = "@proxnap-lcd-status"
+    copy_update_config: str = COPY_UPDATE_CONFIG
 
 
 @dataclass
@@ -279,6 +284,9 @@ def load_settings(path: str) -> Settings:
         settings.services = parse_csv(raw["services"])
     settings.button_input = raw.get("button_input", settings.button_input)
     settings.lcd_message_lock = raw.get("lcd_message_lock", settings.lcd_message_lock)
+    settings.copy_status_enabled = parse_bool(raw.get("copy_status_enabled", "false"), False)
+    settings.copy_status_socket = raw.get("copy_status_socket", settings.copy_status_socket)
+    settings.copy_update_config = raw.get("copy_update_config", settings.copy_update_config)
     settings.power_status_enabled = parse_bool(raw.get("power_status_enabled", "false"), False)
     # Explicit absolute paths only; never discover input devices implicitly.
     settings.power_status_inputs = tuple(dict.fromkeys(
@@ -1235,6 +1243,7 @@ class LcdUi:
     )
 
     def __init__(self):
+        self.settings = Settings()
         self.mode = "home"
         self.group_index = 0
         self.page_by_group = {group: 0 for group in GROUPS}
@@ -1423,19 +1432,19 @@ class LcdUi:
         if action == "UpdateRefreshRun":
             ok = start_systemd_job(
                 "proxnap-lcd-update",
-                [COPY_UPDATE_CONTROL, "--config", COPY_UPDATE_CONFIG, "--run-upgrade"],
+                [COPY_UPDATE_CONTROL, "--config", self.settings.copy_update_config, "--run-upgrade"],
             )
             self.set_message("5.1.1 Update", "Started" if ok else "Start failed", now, 2.5)
         elif action == "UpdateRefresh":
             ok = start_systemd_job(
                 "proxnap-lcd-check-updates",
-                [COPY_UPDATE_CONTROL, "--config", COPY_UPDATE_CONFIG, "--check-updates"],
+                [COPY_UPDATE_CONTROL, "--config", self.settings.copy_update_config, "--check-updates"],
             )
             self.set_message("5.1.2 Refresh", "Started" if ok else "Start failed", now, 2.5)
         elif action == "UpdateRun":
             ok = start_systemd_job(
                 "proxnap-lcd-run-updates",
-                [COPY_UPDATE_CONTROL, "--config", COPY_UPDATE_CONFIG, "--run-install"],
+                [COPY_UPDATE_CONTROL, "--config", self.settings.copy_update_config, "--run-install"],
             )
             self.set_message("5.1.3 Run", "Started" if ok else "Start failed", now, 2.5)
         elif action == "Reboot":
@@ -1828,6 +1837,8 @@ def run(args) -> int:
     output_suspended = True
     power_inputs = None
     power_popup = None
+    popup_source = None
+    copy_receiver = None
 
     try:
         lcd.open()
@@ -1840,6 +1851,7 @@ def run(args) -> int:
             if mono >= next_config_reload:
                 settings = load_settings(args.config)
                 next_config_reload = mono + settings.config_reload_seconds
+            ui.settings = settings
 
             # Keep draining the existing input sources even during an external
             # message, but do not let hidden UI actions consume these events.
@@ -1859,13 +1871,32 @@ def run(args) -> int:
                 elif power_inputs is not None:
                     power_inputs.close()
                     power_inputs = None
-                if power_popup is not None and (not owned or not settings.enabled or not settings.power_status_enabled):
+                copy_notice = None
+                copy_changed = False
+                if settings.enabled and settings.copy_status_enabled:
+                    if copy_receiver is None:
+                        copy_receiver = StatusReceiver()
+                    copy_changed = copy_receiver.name != settings.copy_status_socket
+                    copy_receiver.configure(settings.copy_status_socket, mono)
+                    copy_notice = copy_receiver.poll(owned and not output_suspended)
+                elif copy_receiver is not None:
+                    copy_receiver.close()
+                    copy_receiver = None
+                popup_disabled = ((popup_source == "power" and not settings.power_status_enabled)
+                                  or (popup_source == "copy" and (not settings.copy_status_enabled or copy_changed)))
+                if power_popup is not None and (not owned or not settings.enabled or popup_disabled or copy_notice == "cancel"):
                     power_popup.finish(ui, mono)
                     power_popup = None
+                    popup_source = None
                     last_activity = mono
                     last_lines = None
                     last_render = 0.0
                     ignore_until_release = True
+                    # Cancel boundaries never replay queued or held navigation.
+                    if buttons:
+                        ignore_until_release = bool(buttons[-1])
+                    buttons = []
+                    power_request = False
                 if not owned:
                     output_suspended = True
                     last_render = 0.0
@@ -1906,9 +1937,10 @@ def run(args) -> int:
                             last_render = 0.0
                             output_suspended = False
 
-                        if power_request and power_popup is None:
+                        if (power_request or copy_notice == "status") and power_popup is None:
                             ignore_until_release = ignore_until_release or bool(ui.press_mask)
                             power_popup = _PowerStatusPopup(ui, mono, settings.power_status_page_seconds)
+                            popup_source = "copy" if copy_notice == "status" else "power"
                             lcd.backlight(True)
                             last_lines = None
                             last_render = 0.0
@@ -1916,6 +1948,7 @@ def run(args) -> int:
                         if power_popup is not None and popup_lines is None:
                             power_popup.finish(ui, mono)
                             power_popup = None
+                            popup_source = None
                             ui.reset_press()
                             ignore_until_release = bool(buttons[-1]) if buttons else ignore_until_release
                             buttons = []
@@ -2017,6 +2050,8 @@ def run(args) -> int:
                         lcd.clear()
                         lcd.backlight(False)
         finally:
+            if copy_receiver is not None:
+                copy_receiver.close()
             try:
                 if power_inputs is not None:
                     power_inputs.close()

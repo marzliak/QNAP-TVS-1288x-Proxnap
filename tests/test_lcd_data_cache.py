@@ -28,6 +28,7 @@ class DataCacheTests(unittest.TestCase):
         self.ns.update({
             "__builtins__": dict(vars(builtins), open=forbidden, __import__=forbidden),
             "dataclass": dataclass, "LCD_WIDTH": 16, "LCD_MESSAGE_LOCK": "mock://unused-lock",
+            "COPY_UPDATE_CONFIG": "mock://unused-copy-config",
             "threading": SimpleNamespace(Lock=threading.Lock),
             "socket": SimpleNamespace(gethostname=lambda: "mockhost"),
             "time": SimpleNamespace(monotonic=lambda: self.now, sleep=forbidden),

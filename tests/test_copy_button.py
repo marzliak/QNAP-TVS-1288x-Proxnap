@@ -56,6 +56,7 @@ class Harness:
         self.effects = []
         self.messages = []
         self.logs = []
+        self.notices = []
         self.opens = 0
         self.closes = []
         self.read_count = 0
@@ -69,6 +70,7 @@ class Harness:
             "os": SimpleNamespace(read=self.read, close=self.close),
             "open_input": self.open_input,
             "log": lambda cfg, text: self.logs.append(text),
+            "send_status_notice": lambda name, op: self.notices.append((self.now, name, op)) or True,
             "lcd_action": self.lcd_action,
             "restore_lcd": lambda cfg: self.effects.append(("restore",)),
             "perform_upgrade": lambda cfg: self.effects.append(("upgrade",)),
