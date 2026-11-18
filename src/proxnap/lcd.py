@@ -20,7 +20,9 @@ Landing page:
   1. pressure: load 1/5 min plus RAM usage;
   2. workload: hostname/uptime plus VM/LXC count;
   3. network: aggregate RX/TX throughput.
-- Lower press: manually advances to the next landing frame.
+- Lower short press: manually advances to the next landing frame.
+- Lower hold, on release: 1..<3 seconds returns to auto-cycling HOME;
+  3 seconds or longer blanks only the display/backlight.
 - Upper press: opens the numbered menu at "1. Status".
 - Upper hold for HOME_LOCK_SECONDS: locks/unlocks the current landing frame.
 - Locked landing shows "L" in the last column instead of the heartbeat.
@@ -77,7 +79,7 @@ Dangerous actions:
 - Lower press cancels/goes back.
 
 Idle behavior:
-- Menu pages return to landing after MENU_IDLE_SECONDS.
+- Menu pages return to auto-cycling landing after home_idle_seconds (default 30).
 - Landing turns the backlight off after timeout_seconds from the config.
 - Any LCD button wakes the display back to the landing page.
 """
@@ -116,7 +118,9 @@ COPY_UPDATE_CONTROL = "/usr/local/sbin/proxnap-copy-update"
 STATUS_STATE_FILE = "/run/proxnap-status.json"
 LCD_MESSAGE_LOCK = "/run/proxnap-lcd-message.lock"
 HOME_LOCK_SECONDS = 1.5
-MENU_IDLE_SECONDS = 120.0
+MENU_IDLE_SECONDS = 30.0
+NEXT_HOME_SECONDS = 1.0
+NEXT_OFF_SECONDS = 3.0
 POWER_CONFIRM_SECONDS = 2.0
 BUTTON_MIN_PRESS_SECONDS = 0.0
 BUTTON_DEBOUNCE_SECONDS = 0.20
@@ -136,6 +140,7 @@ class Settings:
     home_frame_seconds: float = 7.0
     home_tick_seconds: float = 0.5
     heartbeat_enabled: bool = True
+    home_idle_seconds: float = 30.0
     timeout_seconds: int = 300
     config_reload_seconds: int = 30
     data_refresh_seconds: int = 15
@@ -279,6 +284,7 @@ def load_settings(path: str) -> Settings:
     settings.home_frame_seconds = max(2.0, parse_float(raw.get("home_frame_seconds", "7"), 7.0))
     settings.home_tick_seconds = max(0.25, parse_float(raw.get("home_tick_seconds", "0.5"), 0.5))
     settings.heartbeat_enabled = parse_bool(raw.get("heartbeat_enabled", "true"), True)
+    settings.home_idle_seconds = _status_seconds(raw.get("home_idle_seconds", "30"), 30.0, 5.0, 120.0)
     settings.timeout_seconds = max(30, parse_int(raw.get("timeout_seconds", "300"), 300))
     settings.config_reload_seconds = max(5, parse_int(raw.get("config_reload_seconds", "30"), 30))
     settings.data_refresh_seconds = max(2, parse_int(raw.get("data_refresh_seconds", "15"), 15))
@@ -1404,8 +1410,11 @@ class LcdUi:
         self.last_short_at = 0.0
         self.home_frame_lock: int | None = None
         self.home_visible_frame = 0
+        self.display_off_requested = False
 
-    def wake_manual(self, now: float, seconds: float = MENU_IDLE_SECONDS):
+    def wake_manual(self, now: float, seconds: float | None = None):
+        if seconds is None:
+            seconds = self.settings.home_idle_seconds
         self.manual_until = max(self.manual_until, now + seconds)
 
     def set_message(self, line1: str, line2: str, now: float, seconds: float = 1.8):
@@ -1533,7 +1542,11 @@ class LcdUi:
             else:
                 self.leave_section(now)
 
-    def go_home(self, now: float):
+    def go_home(self, now: float, resume_cycle: bool = False):
+        if resume_cycle:
+            self.home_frame_lock = None
+        self.override = None
+        self.override_until = 0.0
         self.mode = "home"
         self.confirm_action = None
         print("ui home", flush=True)
@@ -1544,7 +1557,7 @@ class LcdUi:
         self.group_index = 0
         self.confirm_action = None
         print("ui menu", flush=True)
-        self.wake_manual(now, MENU_IDLE_SECONDS)
+        self.wake_manual(now)
 
     def toggle_home_lock(self):
         if self.home_frame_lock is None:
@@ -1604,13 +1617,13 @@ class LcdUi:
         group = self.current_group()
         self.page_by_group[group] = 0
         print(f"ui enter group={group}", flush=True)
-        self.wake_manual(now, MENU_IDLE_SECONDS)
+        self.wake_manual(now)
 
     def leave_section(self, now: float):
         self.mode = "cover"
         group = self.current_group()
         print(f"ui leave group={group}", flush=True)
-        self.wake_manual(now, MENU_IDLE_SECONDS)
+        self.wake_manual(now)
 
     def enter_current_page(self, pages: list[LcdPage], now: float):
         current = self.current_page(pages)
@@ -1686,60 +1699,27 @@ class LcdUi:
                     self.execute_confirm(now)
 
     def long_press(self, mask: int, now: float, pages_count: int, pages: list[LcdPage]):
-        self.wake_manual(now, MENU_IDLE_SECONDS)
+        # Next is classified only on release by process_mask; never navigate or
+        # change fans at an intermediate threshold. Only OK uses tick-time holds.
+        if mask != self.ENTER:
+            return
+        self.wake_manual(now)
         if self.mode == "home":
-            if mask == self.SELECT:
-                self.next_home_frame()
-            elif mask == self.ENTER:
-                self.toggle_home_lock()
-            return
-
-        if self.mode == "cover":
-            if mask == self.ENTER:
-                self.enter_cover(now)
-            elif mask == self.SELECT:
-                self.group_step(1)
-                print(f"ui next group={self.current_group()}", flush=True)
-            return
-
-        if self.mode == "section":
-            if mask == self.ENTER:
-                self.enter_or_return(now, pages)
-            elif mask == self.SELECT:
-                self.next_page_or_group(pages_count)
-            return
-
-        if self.mode == "fan":
-            if mask == self.SELECT:
-                mode = next_fan_mode(1)
-                ok = set_fan_mode(mode)
-                print(f"ui fan mode={mode} ok={ok}", flush=True)
-                self.set_message("Fan mode", mode if ok else "set failed", now)
-            elif mask == self.ENTER:
-                self.mode = "section"
-                self.set_message("Fan mode", "Saved", now)
-            return
-
-        if self.mode == "updates":
-            if mask == self.SELECT:
-                self.update_index = (self.update_index + 1) % len(self.UPDATE_ITEMS)
-                print(f"ui updates item={self.update_index + 1}", flush=True)
-                self.set_message(*self.update_lines(), now)
-            elif mask == self.ENTER:
-                _label, _detail, action = self.UPDATE_ITEMS[self.update_index % len(self.UPDATE_ITEMS)]
-                self.confirm_action = action
-                self.execute_confirm(now)
-            return
-
-        if self.mode == "confirm":
-            if mask == self.ENTER:
-                if self.confirm_action in {"Reboot", "Shutdown"}:
-                    print(f"ui confirm action={self.confirm_action}", flush=True)
-                    self.execute_confirm(now)
-                else:
-                    self.execute_confirm(now)
-            elif mask == self.SELECT:
-                self.back(now)
+            self.toggle_home_lock()
+        elif self.mode == "cover":
+            self.enter_cover(now)
+        elif self.mode == "section":
+            self.enter_or_return(now, pages)
+        elif self.mode == "fan":
+            self.mode = "section"
+            self.set_message("Fan mode", "Saved", now)
+        elif self.mode == "updates":
+            _label, _detail, action = self.UPDATE_ITEMS[self.update_index % len(self.UPDATE_ITEMS)]
+            self.confirm_action = action
+            self.execute_confirm(now)
+        elif self.mode == "confirm":
+            print(f"ui confirm action={self.confirm_action}", flush=True)
+            self.execute_confirm(now)
 
     def process_mask(self, mask: int, now: float, pages_count: int, pages: list[LcdPage]):
         if mask and not self.press_mask:
@@ -1748,12 +1728,22 @@ class LcdUi:
             self.long_handled = False
             return
 
+        if mask and self.press_mask and mask != self.press_mask:
+            # Chords/changed masks invalidate the whole gesture until release.
+            self.press_mask = 0x03
+            self.long_handled = True
+            return
+
         if mask == 0 and self.press_mask:
             held = now - self.press_started
             press = self.press_mask
             long_done = self.long_handled
             self.press_mask = 0
             self.long_handled = False
+            if press == self.SELECT and not long_done and held >= NEXT_HOME_SECONDS:
+                self.go_home(now, resume_cycle=True)
+                self.display_off_requested = held >= NEXT_OFF_SECONDS
+                return
             if (
                 not long_done
                 and BUTTON_MIN_PRESS_SECONDS <= held
@@ -2051,6 +2041,8 @@ def run(args) -> int:
                     last_lines = None
                     ignore_until_release = bool(buttons[-1]) if buttons else (ignore_until_release or bool(ui.press_mask))
                     ui.reset_press()
+                    if ui.mode not in {"home", "cover", "section"}:
+                        ui.go_home(mono)
                 else:
                     if needs_init:
                         lcd.stop_clock()
@@ -2141,6 +2133,13 @@ def run(args) -> int:
                                     continue
 
                                 ui.process_mask(btn, mono, pages_count, pages)
+                                if ui.display_off_requested:
+                                    # Consume at this release, before any later
+                                    # queued button can act on an invisible menu.
+                                    ui.display_off_requested = False
+                                    lcd.clear()
+                                    lcd.backlight(False)
+                                    ui.reset_press()
                                 last_render = 0.0
                                 last_lines = None
 
@@ -2149,9 +2148,8 @@ def run(args) -> int:
                                 last_render = 0.0
                                 last_lines = None
 
-                            if ui.mode != "home" and ui.manual_until and mono >= ui.manual_until:
-                                ui.go_home(mono)
-                                last_activity = mono
+                            if ui.mode != "home" and not ui.press_mask and ui.manual_until and mono >= ui.manual_until:
+                                ui.go_home(mono, resume_cycle=True)
                                 ui.home_visible_frame = home_frame_index(mono, settings)
                                 last_render = 0.0
                                 last_lines = None
@@ -2179,7 +2177,7 @@ def run(args) -> int:
                                         mono,
                                         settings,
                                         ui.home_frame_lock,
-                                        ui.home_visible_frame,
+                                        ui.home_visible_frame if mono < ui.manual_until else None,
                                     )
                                     ui.home_visible_frame = frame
                                 else:

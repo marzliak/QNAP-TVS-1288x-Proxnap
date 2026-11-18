@@ -16,9 +16,9 @@ USB Copy button, and the power button.
 
 | Chassis feature | Proxnap behavior |
 |---|---|
-| CPU and rear fans | independent curves, CPU50%/rear40% floors, immediate thermal protection and two-zone 100% fallback |
+| CPU and rear fans | independent curves, CPU50%/rear40% floors, immediate safe profile changes, thermal protection and two-zone 100% fallback |
 | 16x2 LCD | live landing frames and Status, Network, Storage, Thermal and Actions menus |
-| LCD buttons | wake without hidden actions; lower selects/advances, upper confirms/returns |
+| LCD buttons | wake without hidden actions; lower selects/advances, hold 1s for cycling or 3s for display off; upper confirms/returns |
 | Status LED | explicit healthy/warning/critical/unknown local health; stale data is not healthy |
 | Front-panel lighting | fixed brightness by default, with an optional breathing effect |
 | HDD, SSD, and M.2 LEDs | green on activity and flashing red on critical SMART health, after explicit bay mapping |

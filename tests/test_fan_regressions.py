@@ -759,7 +759,10 @@ class RuntimeTests(OfflineCase):
                     self.config(**changes)
 
                 self.assertEqual(self.loop([reload]), 0)
-                self.assertEqual(self.cpu_writes()[:2], [128, 255])
+                # Explicit mode selection applies its current thermal target;
+                # an ordinary policy reload still keeps the safe live baseline.
+                expected = 128 if "mode" in changes else 255
+                self.assertEqual(self.cpu_writes()[:2], [128, expected])
 
     def test_hwmon_remap_resets_cache_and_reloads_baseline(self):
         old = self.qnap

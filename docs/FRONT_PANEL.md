@@ -11,7 +11,14 @@ The landing display rotates through pressure (load/RAM), workload
 (hostname/uptime/VM/LXC counts), and aggregate network throughput. A missing,
 failed or expired live snapshot shows `unknown`, not fabricated zero measurements.
 
-- Lower button (`0x02`): advance the landing frame or next section/detail.
+- Lower Next/Down button (`0x02`), released before one second: advance the
+  landing frame or next section/detail; existing fan/update/cancel navigation stays.
+- Lower hold from one second to less than three seconds, **on release**: cancel
+  submenus/confirmations/temporary messages and return to auto-cycling HOME,
+  removing a pinned frame. Three seconds or longer, **on release**: do the same
+  safe reset and blank **only the LCD/backlight**, never the host or other LEDs.
+  Holding does not first trigger short navigation or a fan change. Repeats do not
+  restart the timer; changed/chord masks cancel the gesture until release.
 - Upper button (`0x01`): enter the numbered menu, enter a section, return to its
   cover, or select an action.
 - Upper hold on HOME: lock/unlock the current landing frame.
@@ -19,8 +26,24 @@ failed or expired live snapshot shows `unknown`, not fabricated zero measurement
 
 Sections are Status, Network, Storage, Thermal and Actions. They include local
 services/alerts, visible interface statistics, pools, temperature and fan controls.
-Home frames rotate every seven seconds, detail pages every eight seconds, and
-backlight inactivity defaults to five minutes. The config controls those timings.
+Unpinned HOME frames rotate every seven seconds. A short Next manually selects a
+frame until the manual idle interval expires; upper HOME hold still pins/unpins.
+`home_idle_seconds` now defaults to 30 seconds (previously hard-coded 120): menu
+inactivity cancels pending UI and resumes auto-cycling HOME, without restarting the
+backlight timer. Finite values clamp to 5–120 seconds; invalid/nonfinite values use
+30. An active gesture is classified before applying menu idle return.
+`timeout_seconds` remains 300 seconds (five minutes), measured from last accepted
+button/status activity; auto-return to HOME is not activity. The display goes off
+on the first HOME loop strictly beyond that timeout. These timers are independent.
+`page_seconds=8` is retained for page refresh/rotation eligibility; idle return takes
+precedence over unattended menu rotation. `home_tick_seconds=0.5` and
+`config_reload_seconds=30` are unchanged. Thresholds use monotonic time sampled by
+the existing loop (0.2-second wait plus UART latency), not a real-time guarantee.
+The dark-display wake gesture is consumed in full, even if held; wake returns to
+safe HOME and cannot act on the prior menu. Popup/ownership boundaries cancel
+holds and require release; no hold is queued for later execution. Status popups
+retain their existing pin preservation, and drain Next/Down rather than treating
+it as a hidden home/off gesture.
 Missing thermal values are shown as `?`, not zero degrees.
 
 The shared LCD message lock covers complete transactions, not only individual

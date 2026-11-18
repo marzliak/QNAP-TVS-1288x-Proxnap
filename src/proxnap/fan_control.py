@@ -650,12 +650,17 @@ def controlled_duty(
     settings: Settings,
     state: ControlState,
     now: float,
+    mode_changed: bool = False,
 ) -> float:
     # Protections always precede manual/limits and may bypass any configured cap.
     if raw_temp is None or not math.isfinite(raw_temp) or raw_temp >= min(group.critical_temp, emergency_temp(group, settings)):
         return 100.0
     if group.manual_duty is not None:
         target_duty = clamp(group.manual_duty, max(HARDWARE_FLOORS[group.name], group.min_duty), group.max_duty)
+    if mode_changed:
+        # An explicit profile selection is not a thermal cooldown. Apply its
+        # current safe target in this pass, without the old profile's hold/ramp.
+        return clamp(target_duty, max(HARDWARE_FLOORS[group.name], group.min_duty), 100.0)
     if state.applied_duty is None or target_duty >= state.applied_duty:
         # Thermal increases are immediate: neither hold, deadband nor step applies.
         return target_duty
@@ -776,6 +781,8 @@ def run_controller(args) -> int:
     last_log = 0.0
     last_context = None
     last_settings = None
+    last_mode = None
+    mode_change_pending = False
     states: dict[str, ControlState] = {}
     while running:
         settings = settings_from_config(args.config)
@@ -796,13 +803,16 @@ def run_controller(args) -> int:
             time.sleep(settings.interval)
             continue
         now = time.monotonic()
+        mode_change_pending = mode_change_pending or (last_mode is not None and settings.mode != last_mode)
+        last_mode = settings.mode
+        mode_changed = mode_change_pending
         temps = {group.name: cached_policy_temp(group.sensor_policy, 5.0 if group.sensor_policy == "cpu_package" else 20.0)
                  for group in settings.groups or []}
         context += (repr(sensor_inventory),)
         if context != last_context:
             states = {group.name: initialize_state(hwmon, group, now) for group in settings.groups or []}
             last_context = context
-        should_log = args.once or now - last_log >= 30
+        should_log = args.once or mode_changed or now - last_log >= 30
         lines = []
         failed = False
         for group in settings.groups or []:
@@ -815,7 +825,7 @@ def run_controller(args) -> int:
                 print(f"ERROR: {group.name} sensor unavailable; requesting 100%", flush=True)
             else:
                 target = max(duty_for_temp(temp, group), duty_for_temp(control_temp if control_temp is not None else temp, group))
-            duty = controlled_duty(group, temp, target, settings, state, now)
+            duty = controlled_duty(group, temp, target, settings, state, now, mode_changed=mode_changed)
             ok = maybe_set_group_duty(hwmon, group, duty, state, now, settings.pwm_refresh_seconds)
             if not ok:
                 failed = True
@@ -832,6 +842,8 @@ def run_controller(args) -> int:
             states.clear()
             last_context = None
             hwmon_cache_until = 0.0
+        else:
+            mode_change_pending = False
         if args.once:
             # A stop signal received during a one-shot must not bypass shutdown
             # full duty just because the normal pass happened to finish first.

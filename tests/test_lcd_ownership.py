@@ -560,7 +560,8 @@ class OwnershipTests(unittest.TestCase):
         self.f.hooks = {1: self.f.hold_external, 2: self.f.release_external}
         self.f.run()
         self.assertEqual(self.f.actions, [])
-        self.assertEqual(self.f.ui.confirm_action, 'Reboot')
+        self.assertIsNone(self.f.ui.confirm_action)
+        self.assertEqual(self.f.ui.mode, 'home')
         self.assertEqual(self.f.ui.press_mask, 0)
 
     def test_power_confirmation_threshold_and_mock_command_preserved(self):

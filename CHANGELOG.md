@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-11-17 — display shortcuts and immediate fan profile selection
+
+- Explicit fan mode changes apply the current safe temperature/profile target on
+  the next control pass, without inheriting the previous mode's cooldown hold or
+  descent steps. Normal thermal cooldown smoothing, CPU50%/rear40% floors,
+  raw-temperature protection, sensor-loss fallback and verified PWM writes remain.
+- Lower/Next LCD holds return to automatic home cycling after 1 second or switch
+  off only the display after 3 seconds. A short press retains menu navigation;
+  waking a dark display cannot dispatch a hidden menu action. Idle menus return
+  to cycling after 30 seconds; automatic display-off remains 300 seconds.
+- These are software/offline-tested contracts; physical gesture and acoustic
+  acceptance must be checked separately on each installed unit.
+
 ## Unreleased — status availability and configurable metrics
 
 - Add opt-in readable LCD status scrolling: fixed Portuguese severity/cause
