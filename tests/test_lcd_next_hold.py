@@ -220,11 +220,29 @@ def test_popup_drains_next_hold_without_hidden_off_or_pin_loss(tmp_path, kind):
     f.events = {2: [2], 4: [2], 6: [0]}
     f.load()
     if kind == 'copy':
+        # Exercise UI hold draining with an already-authenticated notice, at any
+        # test UID. Real SO_PEERCRED/UID0 integration is covered separately by
+        # test_lcd_copy_status, which explicitly requires root.
+        class AuthenticatedReceiver:
+            name = None
+
+            def configure(self, name, mono):
+                self.name = name
+
+            def poll(self, owned):
+                notices = f.notices.pop(f.tick, [])
+                return notices[0] if owned and notices else None
+
+            def close(self):
+                self.name = None
+
+        f.ns['StatusReceiver'] = AuthenticatedReceiver
         f.notices = {1: ['status']}
     else:
         f.power_click(1)
     try:
         f.run()
+        assert f.popups == 1
         assert not any(data == b'\x4d\x5e\x00' for _, data in f.writes)
         assert not f.actions and f.ui.home_frame_lock == 2 and f.ui.press_mask == 0
     finally:
