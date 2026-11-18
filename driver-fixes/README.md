@@ -24,4 +24,37 @@ python3 -B driver-fixes/test_driver_pwm_validation.py \
 
 The selected literal C definitions compile with mandatory port/delay/mutex mocks and UBSan. No realEC IO or module load occurs. The range harness proves the rest of the source unchanged and requires the unfixed negative control to fail. The transport harness exercises failure phases, first errors,50microsecond epilogues, release and partial effects. Internal CHECK totals are not counts of distinct scenarios. Captured unsigned type-limit warnings remain visible where specifically exempted from-Werror; other warnings remain fatal.
 
+## Panel brightness mask — analysis-only candidate
+
+`qnap8528-1.22-panel-mask.patch` changes only the final `0x245` mask from
+`OR 0xef` to `AND 0xef`: clear bit 4 while preserving the other bits from that
+read. The original successful path yields `0xff` for every initial byte. The
+candidate is a semantic mask correction, **not a fan-pulse fix or a deployable
+brightness-animation driver**. No installer applies it.
+
+Use the same pinned original source above; do not stack patches without separate
+validation. Run the RAM-only callback harness explicitly:
+
+```sh
+python3 -B driver-fixes/test_driver_panel_mask.py \
+  --source "$SOURCE" \
+  --source-sha256 5a822199043a65298d486c26e1e3b5ab6b8e816d98013113bebd8f2c83f137d3 \
+  --scratch-root "$TMPDIR"
+```
+
+The harness compiles the literal baseline/candidate callback with UBSan and
+mandatory inert register mocks. It exercises brightness 0..100 against all 256
+initial control-register bytes, unregister preservation, every callback IO error
+phase, and a baseline negative control. It also deliberately reproduces unresolved
+partial-effect and stale-read problems: failure after setting bit 4 has no cleanup,
+and an injected register change between read and write is overwritten. That
+injection is an adversarial model, not evidence of a second live writer to this
+register. Existing per-command transport locking is unchanged; full transaction
+arbitration and failure recovery are not established by this patch.
+
+**Do not install/load or animate real hardware based on these results.** A full
+module build, controller semantics, bounded recovery and concurrency/latency
+validation remain separate gates. No continuous brightness writer, fan change,
+service restart or physical acceptance is included.
+
 A full module build also needs exact target headers and separate vermagic, symbolCRC, compiler and signing checks. Static success is not runtime lockdep, physical acceptance or permission to load. Do not execute modules_install, depmod, reload or reboot here. The userspace installer must never apply these optional patches automatically.

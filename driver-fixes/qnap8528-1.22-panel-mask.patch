@@ -1,0 +1,12 @@
+diff --git a/src/qnap8528.c b/src/qnap8528.c
+--- a/src/qnap8528.c
++++ b/src/qnap8528.c
+@@ -735,7 +735,7 @@ static int qnap8528_led_panel_brightness_set(struct led_classdev *cdev, enum led_brigh
+ 	ret = qnap8528_ec_read(0x245, &tmp);
+ 	if (ret)
+ 		return ret;
+-	tmp |= 0xef;
++	tmp &= 0xef;
+ 
+ 	ret = qnap8528_ec_write(0x245, tmp);
+ 	if (ret)

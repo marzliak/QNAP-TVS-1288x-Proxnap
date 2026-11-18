@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-11-17 — offline panel brightness mask candidate
+
+- Add an optional one-line panel control-register mask correction and a pinned,
+  RAM-only C callback harness covering all brightness/control-byte combinations,
+  unregister, error phases and a failing original-source negative control.
+- Explicitly retain deployment blockers: partial-failure cleanup, transaction
+  arbitration and physical semantics/latency remain unverified. The candidate
+  does not establish a fix for fan pulses and is not installed or enabled by the
+  userspace installer. No live LED, driver or service changes are included.
+
 ## 2026-11-17 — display shortcuts and immediate fan profile selection
 
 - Explicit fan mode changes apply the current safe temperature/profile target on
