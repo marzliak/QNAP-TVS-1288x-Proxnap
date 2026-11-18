@@ -31,8 +31,8 @@ def lcd():
 
 
 @pytest.mark.parametrize('mode', ['home', 'cover', 'section', 'fan', 'updates', 'confirm'])
-@pytest.mark.parametrize('duration', [1.0, 1.001, 2.999, 3.0, 3.001, 20.0])
-def test_hold_classified_once_on_release_without_intermediate_actions(lcd, mode, duration):
+@pytest.mark.parametrize('duration', [1.0, 1.001, 2.999])
+def test_home_hold_classified_once_on_release_without_intermediate_actions(lcd, mode, duration):
     ui = lcd.LcdUi()
     ui.mode, ui.confirm_action = mode, 'Shutdown'
     ui.home_frame_lock = 2
@@ -53,6 +53,23 @@ def test_hold_classified_once_on_release_without_intermediate_actions(lcd, mode,
     ui.process_mask(0, 100, 1, [])
     assert not ui.tick(100, 1, [])
     assert ui.mode == 'home'
+
+
+@pytest.mark.parametrize('mode', ['home', 'cover', 'section', 'fan', 'updates', 'confirm'])
+def test_display_off_fires_at_three_seconds_without_release_and_only_once(lcd, mode):
+    ui = lcd.LcdUi()
+    ui.mode, ui.confirm_action, ui.home_frame_lock = mode, 'Shutdown', 2
+    ui.process_mask(2, 10, 1, [])
+    assert not ui.tick(12.999, 1, [])
+    assert ui.mode == mode and not ui.display_off_requested
+    assert ui.tick(13, 1, [])
+    assert ui.mode == 'home' and ui.confirm_action is None
+    assert ui.home_frame_lock is None and ui.display_off_requested
+    ui.display_off_requested = False  # emulate consumed final display effect
+    ui.process_mask(2, 14, 1, [])
+    assert not ui.tick(14, 1, [])
+    ui.process_mask(0, 20, 1, [])
+    assert not ui.display_off_requested and not ui.tick(20, 1, [])
 
 
 @pytest.mark.parametrize('duration', [0, 0.001, 0.999])
@@ -151,6 +168,22 @@ def test_same_batch_after_off_consumes_wake_instead_of_entering_menu(tmp_path):
         f.run()
         assert (2, b'\x4d\x5e\x00') in f.writes
         assert f.ui.mode == 'home' and not f.actions
+    finally:
+        f.cleanup()
+
+
+def test_real_loop_threshold_off_ignores_repeats_and_release_then_fresh_touch_wakes(tmp_path):
+    def admin(ui):
+        ui.mode, ui.confirm_action = 'confirm', 'Shutdown'
+    f = run_fixture(tmp_path, [10, 11, 13.999, 14, 15, 16, 17, 18, 19], hook=admin,
+                    events={1: [2], 4: [2, 2], 6: [0], 7: [2], 8: [0]})
+    try:
+        f.run()
+        assert [(tick, data) for tick, data in f.writes if data == b'\x4d\x5e\x00'] == [(3, b'\x4d\x5e\x00')]
+        assert not any(3 <= tick < 7 and data == b'\x4d\x5e\x01' for tick, data in f.writes)
+        assert (7, b'\x4d\x5e\x01') in f.writes
+        assert f.ui.mode == 'home' and f.ui.confirm_action is None and not f.actions
+        f.assert_available()
     finally:
         f.cleanup()
 

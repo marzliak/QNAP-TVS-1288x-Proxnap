@@ -10,6 +10,15 @@
   does not establish a fix for fan pulses and is not installed or enabled by the
   userspace installer. No live LED, driver or service changes are included.
 
+## 2026-11-17 — display hold threshold correction
+
+- Switch the LCD/backlight off when a lower-button hold reaches three seconds,
+  not only when released. Consume continued hold/repeat and release before the
+  dark-wake path so the same gesture cannot turn it back on. A fresh press wakes.
+- Preserve 1–<3 second release-to-HOME, short navigation, popup/ownership guards,
+  inactivity timers and all fan behavior. Add threshold/repeat/release loop tests
+  and explicit display off/wake log events; physical acceptance remains separate.
+
 ## 2026-11-17 — display shortcuts and immediate fan profile selection
 
 - Explicit fan mode changes apply the current safe temperature/profile target on

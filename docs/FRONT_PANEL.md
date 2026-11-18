@@ -15,10 +15,12 @@ failed or expired live snapshot shows `unknown`, not fabricated zero measurement
   landing frame or next section/detail; existing fan/update/cancel navigation stays.
 - Lower hold from one second to less than three seconds, **on release**: cancel
   submenus/confirmations/temporary messages and return to auto-cycling HOME,
-  removing a pinned frame. Three seconds or longer, **on release**: do the same
+  removing a pinned frame. **At three seconds, while still held**: do the same
   safe reset and blank **only the LCD/backlight**, never the host or other LEDs.
-  Holding does not first trigger short navigation or a fan change. Repeats do not
-  restart the timer; changed/chord masks cancel the gesture until release.
+  Continued hold/repeat and release are consumed without waking; only a fresh
+  press after release can wake the display. A delayed release processed before
+  the threshold tick also performs the off action once. Holding does not first
+  trigger short navigation or a fan change; changed/chord masks cancel the gesture.
 - Upper button (`0x01`): enter the numbered menu, enter a section, return to its
   cover, or select an action.
 - Upper hold on HOME: lock/unlock the current landing frame.

@@ -21,8 +21,8 @@ Landing page:
   2. workload: hostname/uptime plus VM/LXC count;
   3. network: aggregate RX/TX throughput.
 - Lower short press: manually advances to the next landing frame.
-- Lower hold, on release: 1..<3 seconds returns to auto-cycling HOME;
-  3 seconds or longer blanks only the display/backlight.
+- Lower hold: release at 1..<3 seconds returns to auto-cycling HOME;
+  reaching 3 seconds blanks only the display/backlight while still held.
 - Upper press: opens the numbered menu at "1. Status".
 - Upper hold for HOME_LOCK_SECONDS: locks/unlocks the current landing frame.
 - Locked landing shows "L" in the last column instead of the heartbeat.
@@ -1699,8 +1699,8 @@ class LcdUi:
                     self.execute_confirm(now)
 
     def long_press(self, mask: int, now: float, pages_count: int, pages: list[LcdPage]):
-        # Next is classified only on release by process_mask; never navigate or
-        # change fans at an intermediate threshold. Only OK uses tick-time holds.
+        # Next has its own display-only tick threshold; never use navigation or
+        # fan/update actions as an intermediate long-hold effect.
         if mask != self.ENTER:
             return
         self.wake_manual(now)
@@ -1754,6 +1754,11 @@ class LcdUi:
                 self.short_press(press, now, pages_count, pages)
 
     def tick(self, now: float, pages_count: int, pages: list[LcdPage]) -> bool:
+        if self.press_mask == self.SELECT and not self.long_handled and now - self.press_started >= NEXT_OFF_SECONDS:
+            self.go_home(now, resume_cycle=True)
+            self.display_off_requested = True
+            self.long_handled = True
+            return True
         if self.mode == "home" and self.press_mask == self.ENTER:
             threshold = HOME_LOCK_SECONDS
         elif self.mode == "confirm" and self.press_mask == self.ENTER and self.confirm_action in {"Reboot", "Shutdown"}:
@@ -2115,9 +2120,16 @@ def run(args) -> int:
                                 lcd.write_lines(*last_lines)
                             for btn in buttons:
                                 print(f"button {button_name(btn)} mask=0x{btn:02x}", flush=True)
+                                if ignore_until_release:
+                                    # This gate precedes dark wake: autorepeats of
+                                    # the off gesture cannot switch the LCD on.
+                                    if btn == 0:
+                                        ignore_until_release = False
+                                    continue
                                 if not lcd.backlight_on:
                                     if btn:
                                         lcd.backlight(True)
+                                        print("display on: fresh button", flush=True)
                                         ui.go_home(mono)
                                         last_activity = mono
                                         last_render = 0.0
@@ -2127,11 +2139,6 @@ def run(args) -> int:
                                     continue
 
                                 last_activity = mono
-                                if ignore_until_release:
-                                    if btn == 0:
-                                        ignore_until_release = False
-                                    continue
-
                                 ui.process_mask(btn, mono, pages_count, pages)
                                 if ui.display_off_requested:
                                     # Consume at this release, before any later
@@ -2139,12 +2146,22 @@ def run(args) -> int:
                                     ui.display_off_requested = False
                                     lcd.clear()
                                     lcd.backlight(False)
+                                    print("display off: Next hold", flush=True)
                                     ui.reset_press()
                                 last_render = 0.0
                                 last_lines = None
 
                             if ui.tick(mono, pages_count, pages):
                                 last_activity = mono
+                                last_render = 0.0
+                                last_lines = None
+                            if ui.display_off_requested:
+                                ui.display_off_requested = False
+                                lcd.clear()
+                                lcd.backlight(False)
+                                print("display off: Next hold threshold", flush=True)
+                                ignore_until_release = True
+                                ui.reset_press()
                                 last_render = 0.0
                                 last_lines = None
 
